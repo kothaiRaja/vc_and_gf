@@ -396,58 +396,71 @@ workflow {
 
     // Step 1: Reference genome
     def genome_path = "${params.test_data_dir}/reference/genome.fa"
+    log.info "Checking reference genome file at: ${genome_path}"
     def genome_channel = file(genome_path).exists() 
-        ? Channel.value(file(genome_path)) 
-        : DOWNLOAD_REF_GENOME()
+        ? { log.info "Reference genome already exists at: ${genome_path}" ; file(genome_path) }()
+        : { log.info "Downloading reference genome..." ; DOWNLOAD_REF_GENOME() }()
 
     // Step 2: SNPs VCF file
     def snps_path = "${params.test_data_dir}/reference/variants_snp.vcf.gz"
+    log.info "Checking SNPs VCF file at: ${snps_path}"
     def snps_channel = file(snps_path).exists() 
-        ? Channel.value(file(snps_path)) 
-        : DOWNLOAD_VARIANTS_SNP()
+        ? { log.info "SNPs VCF file already exists at: ${snps_path}" ; file(snps_path) }()
+        : { log.info "Downloading SNPs VCF file..." ; DOWNLOAD_VARIANTS_SNP() }()
 
     // Step 3: INDELs VCF file
     def indels_path = "${params.test_data_dir}/reference/variants_indels.vcf.gz"
+    log.info "Checking INDELs VCF file at: ${indels_path}"
     def indels_channel = file(indels_path).exists() 
-        ? Channel.value(file(indels_path)) 
-        : DOWNLOAD_VARIANTS_INDELS()
+        ? { log.info "INDELs VCF file already exists at: ${indels_path}" ; file(indels_path) }()
+        : { log.info "Downloading INDELs VCF file..." ; DOWNLOAD_VARIANTS_INDELS() }()
 
     // Step 4: Denylist BED file
     def denylist_path = "${params.test_data_dir}/reference/denylist.bed"
+    log.info "Checking denylist BED file at: ${denylist_path}"
     def denylist_channel = file(denylist_path).exists() 
-        ? Channel.value(file(denylist_path)) 
-        : DOWNLOAD_DENYLIST()
+        ? { log.info "Denylist BED file already exists at: ${denylist_path}" ; file(denylist_path) }()
+        : { log.info "Downloading denylist BED file..." ; DOWNLOAD_DENYLIST() }()
 
     // Step 5: GTF file
     def gtf_path = "${params.test_data_dir}/reference/annotations.gtf"
+    log.info "Checking GTF file at: ${gtf_path}"
     def gtf_channel = file(gtf_path).exists() 
-        ? Channel.value(file(gtf_path)) 
-        : DOWNLOAD_GTF()
+        ? { log.info "GTF file already exists at: ${gtf_path}" ; file(gtf_path) }()
+        : { log.info "Downloading GTF file..." ; DOWNLOAD_GTF() }()
 
     // Step 6: Fasta index
     def fasta_index_path = "${params.test_data_dir}/reference/genome.fa.fai"
+    log.info "Checking Fasta index file at: ${fasta_index_path}"
     def fasta_index_channel = file(fasta_index_path).exists() 
-        ? Channel.value(file(fasta_index_path)) 
-        : CREATE_FASTA_INDEX(genome_channel)
+        ? { log.info "Fasta index file already exists at: ${fasta_index_path}" ; file(fasta_index_path) }()
+        : { log.info "Creating Fasta index file..." ; CREATE_FASTA_INDEX(genome_channel) }()
 
     // Step 7: Genome dictionary
     def genome_dict_path = "${params.test_data_dir}/reference/genome.dict"
+    log.info "Checking Genome dictionary file at: ${genome_dict_path}"
     def genome_dict_channel = file(genome_dict_path).exists() 
-        ? Channel.value(file(genome_dict_path)) 
-        : CREATE_GENOME_DICT(genome_channel)
+        ? { log.info "Genome dictionary file already exists at: ${genome_dict_path}" ; file(genome_dict_path) }()
+        : { log.info "Creating Genome dictionary file..." ; CREATE_GENOME_DICT(genome_channel) }()
 
     // Step 8: STAR index
     def star_index_path = "${params.test_data_dir}/reference/STAR_index"
+    log.info "Checking STAR index directory at: ${star_index_path}"
     def star_index_channel = file(star_index_path).exists() 
-        ? Channel.value(file(star_index_path)) 
-        : CREATE_STAR_INDEX(genome_channel, gtf_channel)
+        ? { log.info "STAR index directory already exists at: ${star_index_path}" ; file(star_index_path) }()
+        : { log.info "Creating STAR index directory..." ; CREATE_STAR_INDEX(genome_channel, gtf_channel) }()
 
     // Step 9: Filtered VCF file
     def filtered_vcf_path = "${params.test_data_dir}/reference/merged.filtered.recode.vcf.gz"
     def filtered_vcf_index_path = "${params.test_data_dir}/reference/merged.filtered.recode.vcf.gz.tbi"
+    log.info "Checking Filtered VCF files at: ${filtered_vcf_path} and ${filtered_vcf_index_path}"
     def filtered_vcf_channel = (file(filtered_vcf_path).exists() && file(filtered_vcf_index_path).exists()) 
-        ? Channel.value([file(filtered_vcf_path), file(filtered_vcf_index_path)]) 
-        : PREPARE_VCF_FILE(snps_channel, indels_channel, denylist_channel)
+        ? { log.info "Filtered VCF files already exist at: ${filtered_vcf_path}" ; [file(filtered_vcf_path), file(filtered_vcf_index_path)] }()
+        : { log.info "Preparing Filtered VCF files..." ; PREPARE_VCF_FILE(snps_channel, indels_channel, denylist_channel) }()
+
+    log.info "Reference files processing workflow completed successfully!"
+
+
 
     // Step 10: Java installation
     log.info "Checking Java installation..."

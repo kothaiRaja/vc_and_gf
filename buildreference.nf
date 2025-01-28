@@ -3,18 +3,26 @@ nextflow.enable.dsl = 2
 
 process DOWNLOAD_REF_GENOME {
     tag "Download test genome"
-    container null
+	container null
     publishDir "${params.test_data_dir}/reference", mode: 'copy'
 
     output:
     path "genome.fa"
-
-    when:
+	
+	when:
     !file("${params.test_data_dir}/reference/genome.fa").exists()
 
     script:
     """
-    wget -q -O genome.fa ${params.test_data_genome}
+   # Download the genome file
+	wget -q -O genome.fa.gz ${params.test_data_genome}
+
+	# Check if the file is gzip-compressed
+	if file genome.fa.gz | grep -q 'gzip'; then
+		gunzip genome.fa.gz
+	else
+		mv genome.fa.gz genome.fa
+	fi
     """
 }
 
@@ -97,6 +105,9 @@ process CREATE_FASTA_INDEX {
 
     output:
     path("${genome_fasta}.fai")
+	
+	when:
+    !file("${genome_fasta}.fai").exists()
 
     script:
     """
@@ -114,6 +125,9 @@ process CREATE_GENOME_DICT {
 
     output:
     path("${genome_fasta.baseName}.dict")
+	
+	when:
+    !file("${genome_fasta.baseName}.dict").exists()
 
     script:
     """
@@ -133,6 +147,9 @@ process CREATE_STAR_INDEX {
 
     output:
     path "STAR_index", type: 'dir'
+	
+	 when:
+    !file("${params.test_data_dir}/reference/STAR_index").exists()
 
     script:
     """
@@ -157,6 +174,10 @@ process PREPARE_VCF_FILE {
     output:
     tuple path("merged.filtered.recode.vcf.gz"),
           path("merged.filtered.recode.vcf.gz.tbi")
+		  
+	when:
+    !(file("${params.test_data_dir}/reference/merged.filtered.recode.vcf.gz").exists() &&
+      file("${params.test_data_dir}/reference/merged.filtered.recode.vcf.gz.tbi").exists())
 
     script:  
     """
@@ -191,8 +212,12 @@ process PREPARE_VCF_FILE {
 process CHECK_JAVA {
     tag "Check Java"
     container null
+	
     output:
     stdout emit: java_output
+	
+	when:
+    true
 
     script:
     """
@@ -223,6 +248,9 @@ process DOWNLOAD_SNPEFF_TOOL {
     output:
     path "${params.snpeff_jar_dir}/snpEff.jar"
 	path "${params.snpeff_jar_dir}/snpEff.config"
+	
+	when:
+    !(file("${params.snpeff_jar_dir}/snpEff.jar").exists() && file("${params.snpeff_jar_dir}/snpEff.config").exists())
 
     script:
     """
@@ -246,6 +274,9 @@ process DOWNLOAD_SNPEFF_DB {
 
     output:
     path "${params.snpeff_db_dir}/${genome}"
+	
+	when:
+    !file("${params.snpeff_db_dir}/${genome}").exists()
 
     script:
     """
@@ -272,6 +303,9 @@ process DOWNLOAD_ARRIBA {
     
 	output:
     path 'arriba_v2.4.0', emit: 'arriba_dir'
+	
+	when:
+    !file("${params.test_data_dir}/Tools/ARRIBA/arriba_v2.4.0").exists()
 
     script:
     """
@@ -358,124 +392,90 @@ process DOWNLOAD_CLINVAR {
 
 
 workflow {
-    // Step 1: Check and download reference genome
+    log.info "Starting reference files processing workflow..."
+
+    // Step 1: Reference genome
     def genome_path = "${params.test_data_dir}/reference/genome.fa"
-    if (file(genome_path).exists()) {
-        log.info "Reference genome already exists at: ${genome_path}"
-    } else {
-        log.info "Downloading reference genome..."
-        DOWNLOAD_REF_GENOME()
-    }
+    def genome_channel = file(genome_path).exists() 
+        ? Channel.value(file(genome_path)) 
+        : DOWNLOAD_REF_GENOME()
 
-    // Step 2: Check and download SNPs VCF file
+    // Step 2: SNPs VCF file
     def snps_path = "${params.test_data_dir}/reference/variants_snp.vcf.gz"
-    if (file(snps_path).exists()) {
-        log.info "SNPs VCF file already exists at: ${snps_path}"
-    } else {
-        log.info "Downloading SNPs VCF file..."
-        DOWNLOAD_VARIANTS_SNP()
-    }
+    def snps_channel = file(snps_path).exists() 
+        ? Channel.value(file(snps_path)) 
+        : DOWNLOAD_VARIANTS_SNP()
 
-    // Step 3: Check and download INDELs VCF file
+    // Step 3: INDELs VCF file
     def indels_path = "${params.test_data_dir}/reference/variants_indels.vcf.gz"
-    if (file(indels_path).exists()) {
-        log.info "INDELs VCF file already exists at: ${indels_path}"
-    } else {
-        log.info "Downloading INDELs VCF file..."
-        DOWNLOAD_VARIANTS_INDELS()
-    }
+    def indels_channel = file(indels_path).exists() 
+        ? Channel.value(file(indels_path)) 
+        : DOWNLOAD_VARIANTS_INDELS()
 
-    // Step 4: Check and download denylist BED file
+    // Step 4: Denylist BED file
     def denylist_path = "${params.test_data_dir}/reference/denylist.bed"
-    if (file(denylist_path).exists()) {
-        log.info "Denylist BED file already exists at: ${denylist_path}"
-    } else {
-        log.info "Downloading denylist BED file..."
-        DOWNLOAD_DENYLIST()
-    }
+    def denylist_channel = file(denylist_path).exists() 
+        ? Channel.value(file(denylist_path)) 
+        : DOWNLOAD_DENYLIST()
 
-    // Step 5: Check and download GTF file
+    // Step 5: GTF file
     def gtf_path = "${params.test_data_dir}/reference/annotations.gtf"
-    if (file(gtf_path).exists()) {
-        log.info "GTF file already exists at: ${gtf_path}"
-    } else {
-        log.info "Downloading GTF file..."
-        DOWNLOAD_GTF()
-    }
+    def gtf_channel = file(gtf_path).exists() 
+        ? Channel.value(file(gtf_path)) 
+        : DOWNLOAD_GTF()
 
-    // Step 6: Check and create genome fasta index
+    // Step 6: Fasta index
     def fasta_index_path = "${params.test_data_dir}/reference/genome.fa.fai"
-    if (file(fasta_index_path).exists()) {
-        log.info "Fasta index already exists at: ${fasta_index_path}"
-    } else {
-        log.info "Creating fasta index..."
-        CREATE_FASTA_INDEX(file(genome_path))
-    }
+    def fasta_index_channel = file(fasta_index_path).exists() 
+        ? Channel.value(file(fasta_index_path)) 
+        : CREATE_FASTA_INDEX(genome_channel)
 
-    // Step 7: Check and create genome dictionary
+    // Step 7: Genome dictionary
     def genome_dict_path = "${params.test_data_dir}/reference/genome.dict"
-    if (file(genome_dict_path).exists()) {
-        log.info "Genome dictionary already exists at: ${genome_dict_path}"
-    } else {
-        log.info "Creating genome dictionary..."
-        CREATE_GENOME_DICT(file(genome_path))
-    }
+    def genome_dict_channel = file(genome_dict_path).exists() 
+        ? Channel.value(file(genome_dict_path)) 
+        : CREATE_GENOME_DICT(genome_channel)
 
-    // Step 8: Check and create STAR index
+    // Step 8: STAR index
     def star_index_path = "${params.test_data_dir}/reference/STAR_index"
-    if (file(star_index_path).exists()) {
-        log.info "STAR index already exists at: ${star_index_path}"
-    } else {
-        log.info "Creating STAR index..."
-        CREATE_STAR_INDEX(file(genome_path), file(gtf_path))
-    }
+    def star_index_channel = file(star_index_path).exists() 
+        ? Channel.value(file(star_index_path)) 
+        : CREATE_STAR_INDEX(genome_channel, gtf_channel)
 
-    // Step 9: Check and prepare VCF file (merge SNPs and INDELs)
+    // Step 9: Filtered VCF file
     def filtered_vcf_path = "${params.test_data_dir}/reference/merged.filtered.recode.vcf.gz"
     def filtered_vcf_index_path = "${params.test_data_dir}/reference/merged.filtered.recode.vcf.gz.tbi"
-    if (file(filtered_vcf_path).exists() && file(filtered_vcf_index_path).exists()) {
-        log.info "Filtered VCF file already exists at: ${filtered_vcf_path}"
-    } else {
-        log.info "Preparing filtered VCF file (merging SNPs and INDELs)..."
-        PREPARE_VCF_FILE(file(snps_path), file(indels_path), file(denylist_path))
-    }
+    def filtered_vcf_channel = (file(filtered_vcf_path).exists() && file(filtered_vcf_index_path).exists()) 
+        ? Channel.value([file(filtered_vcf_path), file(filtered_vcf_index_path)]) 
+        : PREPARE_VCF_FILE(snps_channel, indels_channel, denylist_channel)
 
-    // Step 10: Check Java installation (always executed)
+    // Step 10: Java installation
     log.info "Checking Java installation..."
-    // Call the CHECK_JAVA process
     def java_check_result = CHECK_JAVA()
-
-    // Print the Java version check result to the console
     java_check_result.java_output.view()
 
-    //log.info "Checking SnpEff tool existence..."
-	def snpeff_jar_path = "${params.test_data_dir}/Tools/snpEff/snpEff.jar"
-	def snpeff_config_path = "${params.test_data_dir}/Tools/snpEff/snpEff.config"
+    // Step 11: SnpEff Tool
+    log.info "Starting SnpEff setup..."
 
-	// Check if SnpEff tool files exist
-	if (file(snpeff_jar_path).exists() && file(snpeff_config_path).exists()) {
-    log.info "SnpEff tool already exists:"
-    log.info "  - JAR file: ${snpeff_jar_path}"
-    log.info "  - Config file: ${snpeff_config_path}"
-	} else {
-    log.info "SnpEff tool not found. Downloading..."
-    DOWNLOAD_SNPEFF_TOOL()
-	}
+    // Check and download SnpEff tool
+    def snpeff_jar_path = "${params.test_data_dir}/Tools/snpEff/snpEff.jar"
+    def snpeff_config_path = "${params.test_data_dir}/Tools/snpEff/snpEff.config"
+    def snpeff_tool_channel = (file(snpeff_jar_path).exists() && file(snpeff_config_path).exists()) 
+        ? Channel.value([file(snpeff_jar_path), file(snpeff_config_path)]) 
+        : DOWNLOAD_SNPEFF_TOOL()
 
+    // Step 12: Check and download SnpEff database
+    def snpeff_db_path = "${params.test_data_dir}/Tools/snpEff/snpEff/data/${params.genomedb}"
+    if (file(snpeff_db_path).exists()) {
+        log.info "SnpEff database already exists at: ${snpeff_db_path}"
+    } else {
+        log.info "Downloading SnpEff database..."
+        DOWNLOAD_SNPEFF_DB(params.genomedb, snpeff_tool_channel[0])
+    }
 
-	log.info "Checking SnpEff database existence..."
-	def snpeff_db_path = "${params.test_data_dir}/Tools/snpEff/snpEff/data/${params.genomedb}"
+    log.info "SnpEff setup completed successfully!"
 
-	// Check if the SnpEff database exists
-	if (file(snpeff_db_path).exists()) {
-    log.info "SnpEff database already exists at: ${snpeff_db_path}"
-	} else {
-    log.info "SnpEff database not found for genome version '${params.genomedb}'. Downloading..."
-    DOWNLOAD_SNPEFF_DB(params.genomedb, file(snpeff_jar_path))
-	}
-
-
-    // Step 13: Check and download Arriba tool
+    // Step 13: Arriba Tool
     def arriba_dir_path = "${params.test_data_dir}/Tools/ARRIBA/arriba_v2.4.0"
     if (file(arriba_dir_path).exists()) {
         log.info "Arriba tool already exists at: ${arriba_dir_path}"
@@ -484,7 +484,7 @@ workflow {
         DOWNLOAD_ARRIBA()
     }
 
-    // Step 14: Check and download VEP cache
+    // Step 14: VEP Cache
     def vep_cache_path = "${params.test_data_dir}/Tools/VEP/vep_cache"
     if (file(vep_cache_path).exists()) {
         log.info "VEP cache already exists at: ${vep_cache_path}"
@@ -493,7 +493,7 @@ workflow {
         DOWNLOAD_VEP_CACHE()
     }
 
-    // Step 15: Check and download ClinVar files
+    // Step 15: ClinVar VCF
     def clinvar_vcf_path = "${params.test_data_dir}/Tools/VEP/clinvar.vcf.gz"
     def clinvar_tbi_path = "${params.test_data_dir}/Tools/VEP/clinvar.vcf.gz.tbi"
     if (file(clinvar_vcf_path).exists() && file(clinvar_tbi_path).exists()) {
@@ -503,8 +503,7 @@ workflow {
         DOWNLOAD_CLINVAR()
     }
 
-    // Log workflow completion
+    // Final log
     log.info "Reference files processing workflow completed successfully!"
 }
-
 

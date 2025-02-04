@@ -9,8 +9,6 @@ process DOWNLOAD_REF_GENOME {
     output:
     path "genome.fa"
 	
-	when:
-    !file("${params.test_data_dir}/reference/genome.fa").exists()
 
     script:
     """
@@ -34,8 +32,6 @@ process DOWNLOAD_VARIANTS_SNP {
     output:
     path "variants_snp.vcf.gz"
 
-    when:
-    !file("${params.test_data_dir}/reference/variants_snp.vcf.gz").exists()
 
     script:
     """
@@ -50,9 +46,6 @@ process DOWNLOAD_VARIANTS_INDELS {
 
     output:
     path "variants_indels.vcf.gz"
-
-    when:
-    !file("${params.test_data_dir}/reference/variants_indels.vcf.gz").exists()
 
     script:
     """
@@ -519,4 +512,3 @@ workflow {
     // Final log
     log.info "Reference files processing workflow completed successfully!"
 }
-

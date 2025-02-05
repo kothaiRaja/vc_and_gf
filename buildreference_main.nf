@@ -375,11 +375,10 @@ process WRITE_REFERENCE_CONFIG {
         path fasta_index 
         path genome_dict 
         path star_index 
-		tuple path(filtered_vcf), path(filtered_vcf_tbi)
+        tuple path(filtered_vcf), path(filtered_vcf_tbi)
 
     output:
         path "reference_paths.config"
-
 
     script:
     """
@@ -394,26 +393,39 @@ process WRITE_REFERENCE_CONFIG {
     echo "STAR Index: ${star_index}"
     echo "Filtered VCF: ${filtered_vcf}"
     echo "Filtered VCF TBI: ${filtered_vcf_tbi}"
-	
-	ls -lh "${params.actual_data_dir}/reference"  # ✅ List actual files in reference directory
 
+    # Ensure the reference directory exists
+    mkdir -p ${params.base_dir}
 
+    # Write reference paths config
     cat <<EOL > reference_paths.config
-    params {
-        ref_genome = "${genome}"
-        ref_variants_snp = "${variants_snp}"
-        ref_variants_indels = "${variants_indels}"
-        ref_gtf = "${gtf}"
-        ref_denylist = "${denylist}"
-        ref_fasta_index = "${fasta_index}"
-        ref_genome_dict = "${genome_dict}"
-        ref_star_index = "${star_index}"
-        ref_filtered_vcf = "${filtered_vcf}"
-        ref_filtered_vcf_tbi = "${filtered_vcf_tbi}"
-    }
-    EOL
+	params {
+        ref_genome = "\$(realpath genome.fa)"
+        ref_variants_snp = "\$(realpath variants_snp.vcf.gz)"
+        ref_variants_indels = "\$(realpath variants_indels.vcf.gz)"
+        ref_gtf = "\$(realpath annotations.gtf)"
+        ref_denylist = "\$(realpath denylist.bed)"
+        ref_fasta_index = "\$(realpath genome.fa.fai)"
+        ref_genome_dict = "\$(realpath genome.dict)"
+        ref_star_index = "\$(realpath STAR_index)"
+        ref_filtered_vcf = "\$(realpath merged.filtered.recode.vcf.gz)"
+        ref_filtered_vcf_tbi = "\$(realpath merged.filtered.recode.vcf.gz.tbi)"
+}
+EOL
+	
+	# Verify that the file was created
+    if [ ! -f ${params.base_dir}/reference_paths.config ]; then
+        echo "❌ ERROR: reference_paths.config was not created!"
+        exit 1
+    else
+        echo "✅ reference_paths.config successfully created!"
+    fi
+
+    # List directory to check if file was created
+    ls -lh ${params.base_dir}
     """
 }
+
 
 
 
@@ -492,21 +504,21 @@ workflow {
     )
 
 	def filtered_vcf_channel = PREPARE_VCF_FILE(
-    variants_snp_channel, 
-    variants_indels_channel, 
-    denylist_channel
-	)
+        variants_snp_channel, 
+        variants_indels_channel, 
+        denylist_channel
+    )
 
-	// Extract tuple values correctly
-	def filtered_vcf_path = filtered_vcf_channel.map { it[0] }
-	def filtered_vcf_tbi_path = filtered_vcf_channel.map { it[1] }
+    // Extract tuple values correctly
+    def filtered_vcf_path = filtered_vcf_channel.map { it[0] }
+    def filtered_vcf_tbi_path = filtered_vcf_channel.map { it[1] }
 
 
 
 
     // ========================== ✅ WRITE_REFERENCE_CONFIG Call ========================== //
     WRITE_REFERENCE_CONFIG(
-        genome_channel,
+			genome_channel,
             variants_snp_channel,
             variants_indels_channel,
             gtf_channel,

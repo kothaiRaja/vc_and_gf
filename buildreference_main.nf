@@ -400,16 +400,16 @@ process WRITE_REFERENCE_CONFIG {
     # Write reference paths config
     cat <<EOL > reference_paths.config
 	params {
-        ref_genome = "\$(realpath genome.fa)"
-        ref_variants_snp = "\$(realpath variants_snp.vcf.gz)"
-        ref_variants_indels = "\$(realpath variants_indels.vcf.gz)"
-        ref_gtf = "\$(realpath annotations.gtf)"
-        ref_denylist = "\$(realpath denylist.bed)"
-        ref_fasta_index = "\$(realpath genome.fa.fai)"
-        ref_genome_dict = "\$(realpath genome.dict)"
-        ref_star_index = "\$(realpath STAR_index)"
-        ref_filtered_vcf = "\$(realpath merged.filtered.recode.vcf.gz)"
-        ref_filtered_vcf_tbi = "\$(realpath merged.filtered.recode.vcf.gz.tbi)"
+    ref_genome = "\$(realpath ${params.actual_data_dir}/reference/genome.fa)"
+    ref_variants_snp = "\$(realpath ${params.actual_data_dir}/reference/variants_snp.vcf.gz)"
+    ref_variants_indels = "\$(realpath ${params.actual_data_dir}/reference/variants_indels.vcf.gz)"
+    ref_gtf = "\$(realpath ${params.actual_data_dir}/reference/annotations.gtf)"
+    ref_denylist = "\$(realpath ${params.actual_data_dir}/reference/denylist.bed)"
+    ref_fasta_index = "\$(realpath ${params.actual_data_dir}/reference/genome.fa.fai)"
+    ref_genome_dict = "\$(realpath ${params.actual_data_dir}/reference/genome.dict)"
+    ref_star_index = "\$(realpath ${params.actual_data_dir}/reference/STAR_index)"
+    ref_filtered_vcf = "\$(realpath ${params.actual_data_dir}/reference/merged.filtered.recode.vcf.gz)"
+    ref_filtered_vcf_tbi = "\$(realpath ${params.actual_data_dir}/reference/merged.filtered.recode.vcf.gz.tbi)"
 }
 EOL
 	
@@ -422,7 +422,7 @@ EOL
     fi
 
     # List directory to check if file was created
-    ls -lh ${params.base_dir}
+    ls -lh ${params.actual_data_dir}/reference
     """
 }
 
@@ -437,18 +437,21 @@ EOL
 def safeFileChannel(localPath, centralPath, processFunc) {
     if (file(localPath).exists()) {
         log.info "✅ Using existing file: ${localPath}"
-        return Channel.fromPath(localPath)  // ✅ Correct way to create a Nextflow channel
+        return Channel.value(file(localPath))  
     } 
     else if (centralPath && file(centralPath).exists()) {
         log.info "✅ Using centralized file: ${centralPath}"
-        return Channel.fromPath(centralPath)  // ✅ Correct
+        return Channel.value(file(centralPath))  
     } 
     else {
         log.info "📥 File not found, running process to create it..."
-        return processFunc()
+        return processFunc().map { it -> 
+            def publishedPath = file("${params.actual_data_dir}/reference/${it.getName()}") 
+            log.info "✅ Published file path: ${publishedPath}"
+            return publishedPath
+        }
     }
 }
-
 
 
 // ========================== Workflow Definition ========================== //
@@ -510,8 +513,8 @@ workflow {
     )
 
     // Extract tuple values correctly
-    def filtered_vcf_path = filtered_vcf_channel.map { it[0] }
-    def filtered_vcf_tbi_path = filtered_vcf_channel.map { it[1] }
+    def filtered_vcf_path = filtered_vcf_channel.map { file("${params.actual_data_dir}/reference/" + it[0].getName()) }
+    def filtered_vcf_tbi_path = filtered_vcf_channel.map { file("${params.actual_data_dir}/reference/" + it[1].getName()) }
 
 
 

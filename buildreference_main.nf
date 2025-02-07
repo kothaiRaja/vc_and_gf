@@ -1,3 +1,4 @@
+
 nextflow.enable.dsl = 2
 
 
@@ -150,40 +151,35 @@ process CREATE_STAR_INDEX {
     """
 }
 
-process PREPARE_VCF_FILE {
+process FILTER_AND_MERGE_VCF {
+    tag "Filter and Merge VCF Files"
     container "https://depot.galaxyproject.org/singularity/bcftools%3A1.15.1--h0ea216a_0"
     publishDir "${params.actual_data_dir}/reference", mode: 'copy'
 
     input: 
-    path snpsFile
-    path indelsFile
-    path denylisted
+    path variants_snp
+    path variants_indels
+    path denylist
 
     output:
-    tuple path("merged.filtered.recode.vcf.gz"), 
-          path("merged.filtered.recode.vcf.gz.tbi"), emit: filtered_vcf
+    path "merged.filtered.recode.vcf.gz", emit: merged_vcf
+    path "merged.filtered.recode.vcf.gz.tbi", emit: merged_vcf_tbi
 
-
-		  
-	
-    script:  
+    script:
     """
-    # Filter SNPs file
-    bcftools view -T ^${denylisted} ${snpsFile} -Oz -o ${snpsFile.baseName}.filtered.recode.vcf.gz
-    tabix -p vcf ${snpsFile.baseName}.filtered.recode.vcf.gz
+    # Filter SNPs
+    bcftools view -T ^${denylist} ${variants_snp} -Oz -o filtered_snps.vcf.gz
+    tabix -p vcf filtered_snps.vcf.gz  # ✅ Index the filtered SNPs VCF
 
-    # Filter INDELs file
-    bcftools view -T ^${denylisted} ${indelsFile} -Oz -o ${indelsFile.baseName}.filtered.recode.vcf.gz
-    tabix -p vcf ${indelsFile.baseName}.filtered.recode.vcf.gz
+    # Filter INDELs
+    bcftools view -T ^${denylist} ${variants_indels} -Oz -o filtered_indels.vcf.gz
+    tabix -p vcf filtered_indels.vcf.gz  # ✅ Index the filtered INDELs VCF
 
     # Merge the filtered SNPs and INDELs into a single VCF file
-    bcftools merge ${snpsFile.baseName}.filtered.recode.vcf.gz ${indelsFile.baseName}.filtered.recode.vcf.gz \
-        -Oz -o merged.filtered.recode.vcf.gz
+    bcftools merge filtered_snps.vcf.gz filtered_indels.vcf.gz -Oz -o merged.filtered.recode.vcf.gz
+    tabix -p vcf merged.filtered.recode.vcf.gz  # ✅ Index the merged VCF
 
-    # Create a tabix index for the merged VCF
-    tabix -p vcf merged.filtered.recode.vcf.gz
-	
-	# Check and fix contig prefixes in the merged VCF file
+    # Check and fix contig prefixes before finalizing
     if zcat merged.filtered.recode.vcf.gz | grep -q "^##contig=<ID=chr"; then
         echo "Renaming contig prefixes..."
         zcat merged.filtered.recode.vcf.gz | sed 's/^##contig=<ID=chr/##contig=<ID=/' | bgzip > fixed_merged.filtered.recode.vcf.gz
@@ -195,6 +191,25 @@ process PREPARE_VCF_FILE {
     fi
     """
 }
+
+
+process INDEX_VCF {
+    container "https://depot.galaxyproject.org/singularity/bcftools%3A1.15.1--h0ea216a_0"
+    publishDir "${params.actual_data_dir}/reference", mode: 'copy'
+
+    input:
+    path merged_vcf
+
+    output:
+    path "merged.filtered.recode.vcf.gz.tbi", emit: merged_vcf_tbi
+
+    script:
+    """
+    # Create tabix index
+    tabix -p vcf merged.filtered.recode.vcf.gz
+    """
+}
+
 
 process CHECK_JAVA {
     tag "Check Java"
@@ -375,7 +390,8 @@ process WRITE_REFERENCE_CONFIG {
         path fasta_index 
         path genome_dict 
         path star_index 
-        tuple path(filtered_vcf), path(filtered_vcf_tbi)
+        path filtered_vcf
+        path filtered_vcf_tbi
 
     output:
         path "reference_paths.config"
@@ -398,8 +414,8 @@ process WRITE_REFERENCE_CONFIG {
     mkdir -p ${params.base_dir}
 
     # Write reference paths config
-    cat <<EOL > reference_paths.config
-	params {
+    cat <<EOL > ${params.base_dir}/reference_paths.config
+params {
     ref_genome = "\$(realpath ${params.actual_data_dir}/reference/genome.fa)"
     ref_variants_snp = "\$(realpath ${params.actual_data_dir}/reference/variants_snp.vcf.gz)"
     ref_variants_indels = "\$(realpath ${params.actual_data_dir}/reference/variants_indels.vcf.gz)"
@@ -412,9 +428,9 @@ process WRITE_REFERENCE_CONFIG {
     ref_filtered_vcf_tbi = "\$(realpath ${params.actual_data_dir}/reference/merged.filtered.recode.vcf.gz.tbi)"
 }
 EOL
-	
-	# Verify that the file was created
-    if [ ! -f ${params.base_dir}/reference_paths.config ]; then
+
+    # Verify that the file was created
+    if [ ! -f "${params.base_dir}/reference_paths.config" ]; then
         echo "❌ ERROR: reference_paths.config was not created!"
         exit 1
     else
@@ -422,7 +438,7 @@ EOL
     fi
 
     # List directory to check if file was created
-    ls -lh ${params.actual_data_dir}/reference
+    ls -lh ${params.base_dir}
     """
 }
 
@@ -506,15 +522,20 @@ workflow {
         { CREATE_STAR_INDEX(genome_channel, gtf_channel) }
     )
 
-	def filtered_vcf_channel = PREPARE_VCF_FILE(
-        variants_snp_channel, 
-        variants_indels_channel, 
-        denylist_channel
+	// Check for existing merged VCF before running FILTER_AND_MERGE_VCF
+    def merged_vcf_channel = safeFileChannel(
+        "${params.actual_data_dir}/reference/merged.filtered.recode.vcf.gz",
+        params.central_filtered_vcf_path,
+        { FILTER_AND_MERGE_VCF(variants_snp_channel, variants_indels_channel, denylist_channel) }
     )
 
-    // Extract tuple values correctly
-    def filtered_vcf_path = filtered_vcf_channel.map { file("${params.actual_data_dir}/reference/" + it[0].getName()) }
-    def filtered_vcf_tbi_path = filtered_vcf_channel.map { file("${params.actual_data_dir}/reference/" + it[1].getName()) }
+    // Check for existing VCF index before running INDEX_VCF
+    def merged_vcf_tbi_channel = safeFileChannel(
+        "${params.actual_data_dir}/reference/merged.filtered.recode.vcf.gz.tbi",
+        params.central_filtered_vcf_tbi_path,
+        { INDEX_VCF(merged_vcf_channel) }
+    )
+
 
 
 
@@ -529,7 +550,8 @@ workflow {
             fasta_index_channel,
             genome_dict_channel,
             star_index_channel,
-			filtered_vcf_channel
+			merged_vcf_channel,
+			merged_vcf_tbi_channel
             
         
     )

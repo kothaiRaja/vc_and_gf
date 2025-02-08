@@ -164,8 +164,8 @@ process DOWNLOAD_VARIANTS_SNP_INDEX {
     """
 }
 
-process INDEX_VCF {
-    tag "Index VCF File"
+process INDEX_SNP_VCF {
+    tag "Index SNP VCF"
     container "https://depot.galaxyproject.org/singularity/bcftools%3A1.15.1--h0ea216a_0"
     publishDir "${params.actual_data_dir}/reference", mode: 'copy'
 
@@ -173,14 +173,15 @@ process INDEX_VCF {
     path vcf_file
 
     output:
-    path "${vcf_file}.tbi", emit: vcf_index
+    path "${vcf_file}.tbi", emit: snp_index
 
     script:
     """
-    echo \"⚠️ Indexing VCF file using tabix...\"
+    echo "Indexing SNP VCF file: ${vcf_file}"
     tabix -p vcf ${vcf_file}
     """
 }
+
 
 // ========================== Download Indels Variants VCF ========================== //
 process CHECK_OR_DOWNLOAD_VARIANTS_INDELS {
@@ -200,6 +201,25 @@ process CHECK_OR_DOWNLOAD_VARIANTS_INDELS {
     wget -q -O variants_indels.vcf.gz ${params.variants_indels_download_url}
     """
 }
+
+process INDEX_INDEL_VCF {
+    tag "Index INDEL VCF"
+    container "https://depot.galaxyproject.org/singularity/bcftools%3A1.15.1--h0ea216a_0"
+    publishDir "${params.actual_data_dir}/reference", mode: 'copy'
+
+    input:
+    path vcf_file
+
+    output:
+    path "${vcf_file}.tbi", emit: indels_index
+
+    script:
+    """
+    echo "Indexing INDEL VCF file: ${vcf_file}"
+    tabix -p vcf ${vcf_file}
+    """
+}
+
 
 process FILTER_AND_MERGE_VCF {
     tag "Filter and Merge VCF Files"
@@ -350,6 +370,57 @@ process DOWNLOAD_ARRIBA {
     """
 }
 
+process DOWNLOAD_VEP_CACHE {
+    tag "Download VEP Cache"
+    publishDir "${params.actual_data_dir}/Tools/VEP", mode: 'copy'
+    container null  // Use appropriate container if needed
+
+    output:
+    path "${params.vep_cache_dir}", emit: vep_cache
+
+    script:
+    """
+    mkdir -p ${params.vep_cache_dir}
+    echo "Downloading VEP cache for GRCh38..."
+    
+    wget -q -O vep_cache.tar.gz https://ftp.ensembl.org/pub/release-109/variation/indexed_vep_cache/homo_sapiens_vep_109_GRCh38.tar.gz
+    tar -xzvf vep_cache.tar.gz -C ${params.vep_cache_dir} --strip-components=1
+    rm vep_cache.tar.gz
+    """
+}
+
+process DOWNLOAD_CLINVAR {
+    tag "Downloading ClinVar VCF"
+	container null
+	publishDir "${params.actual_data_dir}/Tools/VEP", mode: 'copy'
+	
+	 when:
+    !file("${params.clinvar}").exists() || !file("${params.clinvartbi}").exists()
+	
+    output:
+    path "clinvar.vcf.gz"
+    path "clinvar.vcf.gz.tbi"
+
+    script:
+    """
+    wget -O clinvar.vcf.gz ftp://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz
+    
+    # Check if the VCF download was successful
+    if [ ! -s clinvar.vcf.gz ]; then
+        echo "Error: Failed to download ClinVar VCF file" >&2
+        exit 1
+    fi
+
+    wget -O clinvar.vcf.gz.tbi ftp://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz.tbi
+    
+    # Check if the TBI index download was successful
+    if [ ! -s clinvar.vcf.gz.tbi ]; then
+        echo "Error: Failed to download ClinVar VCF index file" >&2
+        exit 1
+    fi
+    """
+}
+
 
 // Define variables to store the reference genome and genome index paths
 def referenceGenomePath = ''
@@ -363,10 +434,17 @@ def indelsVcfPath = ''
 def indelsIndexPath = ''
 def mergedVcfPath = ''
 def mergedVcfIndexPath = ''
+def known_fusions_path = ''
+def blacklist_path = ''
+def arribaPath = ''
 
 
 
 workflow {
+
+	// ========================== Define Genome Build ========================== //
+	def genome_build = 'GRCh38' 
+	
     // ========================== Reference Genome Handling ========================== //
     genome_ch = 
         params.reference_genome_path && file(params.reference_genome_path).exists() ? 
@@ -377,7 +455,7 @@ workflow {
 
     // Capture the reference genome path from the published directory
     genome_ch.view { path ->
-        referenceGenomePath = file("${params.actual_data_dir}/reference/genome.fa").toString()
+        referenceGenomePath = path.toString()
         println "📂 Reference genome path set to: ${referenceGenomePath}"
     }
 
@@ -393,7 +471,7 @@ workflow {
 
     // Capture the genome index path from the published directory
     genome_index_ch.view { path ->
-        genomeIndexPath = file("${params.actual_data_dir}/reference/genome.fa.fai").toString()
+        genomeIndexPath = path.toString()
         println "📂 Genome index path set to: ${genomeIndexPath}"
     }
 	
@@ -407,7 +485,7 @@ workflow {
 
     // Capture the genome dictionary path from the published directory
     genome_dict_ch.view { path ->
-        genomeDictPath = file("${params.actual_data_dir}/reference/genome.dict").toString()
+        genomeDictPath = path.toString()
         println "📂 Genome dictionary path set to: ${genomeDictPath}"
     }
 	
@@ -421,7 +499,7 @@ workflow {
 
     // Capture the GTF annotation path from the published directory
     gtf_ch.view { path ->
-        gtfPath = file("${params.actual_data_dir}/reference/annotations.gtf").toString()
+        gtfPath = path.toString()
         println "📂 GTF annotation path set to: ${gtfPath}"
     }
 	
@@ -435,7 +513,7 @@ workflow {
 
     // Capture the STAR genome index path from the published directory
     star_index_ch.view { path ->
-        starIndexPath = file("${params.actual_data_dir}/reference/STAR_index").toString()
+        starIndexPath = path.toString()
         println "📂 STAR genome index path set to: ${starIndexPath}"
     }
 	
@@ -449,7 +527,7 @@ workflow {
 
     // Capture the denylist path from the published directory
     denylist_ch.view { path ->
-        denylistPath = file("${params.actual_data_dir}/reference/denylist.bed").toString()
+        denylistPath = path.toString()
         println "📂 Denylist BED file path set to: ${denylistPath}"
     }
 	
@@ -464,23 +542,23 @@ workflow {
 	//Capture the snps path from published directory
 	
 	snp_vcf_ch.view { snp_vcf_path ->  // Changed variable name to 'snp_vcf_path'
-    snpVcfPath = file("${params.actual_data_dir}/reference/variants_snp.vcf.gz").toString()
+    snpVcfPath = snp_vcf_path.toString()
     println "📂 SNP VCF path set to: ${snpVcfPath}"
 }
 
     // ========================== SNP Index Handling ========================== //
     snp_index_ch = 
-        params.variants_snp_index_path && file(params.variants_snp_index_path).exists() ? 
-            Channel.of(file(params.variants_snp_index_path)) :
-        file("${params.actual_data_dir}/reference/variants_snp.vcf.gz.tbi").exists() ?
-            Channel.of(file("${params.actual_data_dir}/reference/variants_snp.vcf.gz.tbi")) :
-        params.variants_snp_index_download_url ? 
-            DOWNLOAD_VARIANTS_SNP_INDEX() :
-            INDEX_VCF(snp_vcf_ch)
+    params.variants_snp_index_path && file(params.variants_snp_index_path).exists() ? 
+        Channel.of(file(params.variants_snp_index_path)) :
+    file("${params.actual_data_dir}/reference/variants_snp.vcf.gz.tbi").exists() ? 
+        Channel.of(file("${params.actual_data_dir}/reference/variants_snp.vcf.gz.tbi")) :
+    params.variants_snp_index_download_url ? 
+        DOWNLOAD_VARIANTS_SNP_INDEX() :
+        INDEX_SNP_VCF(snp_vcf_ch).snp_index
 			
 	// Capture the SNP Index path from the published directory
 	snp_index_ch.view { snp_index_path ->  
-    snpIndexPath = file("${params.actual_data_dir}/reference/variants_snp.vcf.gz.tbi").toString()
+    snpIndexPath = snp_index_path.toString()
     println "📂 SNP Index path set to: ${snpIndexPath}"
 }
 
@@ -496,7 +574,7 @@ workflow {
 	//Capture the indels path from published directory
 	
 	indels_vcf_ch.view { indels_vcf_path ->  
-    indelsVcfPath = file("${params.actual_data_dir}/reference/variants_indels.vcf.gz").toString()
+    indelsVcfPath = indels_vcf_path.toString()
     println "📂 Indels VCF path set to: ${indelsVcfPath}"
 }
 
@@ -505,15 +583,15 @@ workflow {
 	indels_index_ch = 
     params.variants_indels_index_path && file(params.variants_indels_index_path).exists() ? 
         Channel.of(file(params.variants_indels_index_path)) :
-    file("${params.actual_data_dir}/reference/variants_indels.vcf.gz.tbi").exists() ?
+    file("${params.actual_data_dir}/reference/variants_indels.vcf.gz.tbi").exists() ? 
         Channel.of(file("${params.actual_data_dir}/reference/variants_indels.vcf.gz.tbi")) :
     params.variants_indels_index_download_url ? 
         DOWNLOAD_VARIANTS_INDELS_INDEX() :
-        INDEX_VCF(indels_vcf_ch) 
+        INDEX_INDEL_VCF(indels_vcf_ch).indels_index
 		
 	// Capture the Indels Index path from the published directory
 	indels_index_ch.view { indels_index_path ->  
-    indelsIndexPath = file("${params.actual_data_dir}/reference/variants_indels.vcf.gz.tbi").toString()
+    indelsIndexPath = indels_index_path.toString()
     println "📂 Indels Index path set to: ${indelsIndexPath}"
 }
 
@@ -546,13 +624,13 @@ workflow {
 
     // Capture merged VCF path
     merged_vcf_ch.view { merged_vcf_path ->
-        mergedVcfPath = file("${params.actual_data_dir}/reference/merged.filtered.recode.vcf.gz").toString()
+        mergedVcfPath = merged_vcf_path.toString()
         println "📂 Merged VCF path set to: ${mergedVcfPath}"
     }
 
     // Capture merged VCF index path
     merged_vcf_index_ch.view { merged_vcf_index_path ->
-        mergedVcfIndexPath = file("${params.actual_data_dir}/reference/merged.filtered.recode.vcf.gz.tbi").toString()
+        mergedVcfIndexPath = merged_vcf_index_path.toString()
         println "📂 Merged VCF Index path set to: ${mergedVcfIndexPath}"
     }
 	
@@ -613,12 +691,12 @@ workflow {
     // ========================== Capture SnpEff Paths ========================== //
 
     snpeff_jar_ch.view { snpeff_jar_path ->  
-        snpEffJarPath = ("${params.actual_data_dir}/Tools/snpEff.jar").toString()
+        snpEffJarPath = snpeff_jar_path.toString()
         println "📂 SnpEff JAR path set to: ${snpEffJarPath}"
     }
 
     snpeff_config_ch.view { snpeff_config_path ->  
-        snpEffConfigPath = ("${params.actual_data_dir}/Tools/snpEff.config").toString()
+        snpEffConfigPath = snpeff_config_path.toString()
         println "📂 SnpEff Config path set to: ${snpEffConfigPath}"
     }
 	
@@ -649,41 +727,108 @@ workflow {
 // ========================== Capture SnpEff Database Path ========================== //
 
 	snpeff_db_ch.view { snpeff_db_path ->  
-		snpEffDbPath = "${params.actual_data_dir}/Tools/snpEff/${params.genomedb}".toString()
+		snpEffDbPath = snpeff_db_path.toString()
 		println "📂 SnpEff Database path set to: ${snpEffDbPath}"
 }
 
 // ========================== Arriba Tool Handling ========================== //
 
-def arriba_dir_ch  // Channel to dynamically handle Arriba's path
 
-if (params.arriba_tool_dir && file("${params.arriba_tool_dir}/arriba_v2.4.0").exists()) {
-    println "✅ Arriba tool found in the server directory. Skipping download."
+def arriba_dir_ch
 
-    arriba_dir_ch = Channel.of(file("${params.arriba_tool_dir}/arriba_v2.4.0"))
-    arribaPath = "${params.arriba_tool_dir}/arriba_v2.4.0"
+if (params.arriba_tool_dir_path && file("${params.arriba_tool_dir_path}/arriba_v2.4.0").exists()) {
+    println "✅ Arriba tool found in the server directory."
+    arriba_dir_ch = Channel.of(file("${params.arriba_tool_dir_path}/arriba_v2.4.0"))
 
 } else if (file("${params.actual_data_dir}/Tools/ARRIBA/arriba_v2.4.0").exists()) {
-    println "✅ Arriba tool found in the publish directory. Skipping download."
-
+    println "✅ Arriba tool found in the publish directory."
     arriba_dir_ch = Channel.of(file("${params.actual_data_dir}/Tools/ARRIBA/arriba_v2.4.0"))
-    arribaPath = "${params.actual_data_dir}/Tools/ARRIBA/arriba_v2.4.0"
 
 } else {
     println "⚠️ Arriba tool not found. Downloading..."
     def result = DOWNLOAD_ARRIBA()
-
     arriba_dir_ch = result.arriba_dir
-    arribaPath = "${params.actual_data_dir}/Tools/ARRIBA/arriba_v2.4.0"
 }
 
-// ========================== Capture Arriba Path ========================== //
+// ========================== Capture Arriba Tool and Database Paths ========================== //
+// ========================== Handle Arriba Tool and Capture Paths ========================== //
+arriba_dir_ch.view { arriba_dir_path ->  
+    // Set Arriba path after checking if it exists in the server or publish directory
+    if (arriba_dir_path.toString().contains('/work/')) {
+        // If downloaded (i.e., in workdir), set to publish directory
+        arribaPath = "${params.actual_data_dir}/Tools/ARRIBA/arriba_v2.4.0"
+    } else {
+        // If from server or already published, use the existing path
+        arribaPath = arriba_dir_path.toString()
+    }
 
-arriba_dir_ch.view { path ->  
-	arribaPath = "${params.actual_data_dir}/Tools/ARRIBA".toString()
     println "📂 Arriba tool path set to: ${arribaPath}"
+
+    // Define known fusions and blacklist paths directly without immediate file check
+    knownFusionsPath = "${arribaPath}/database/known_fusions_hg38_GRCh38_v2.4.0.tsv.gz"
+    blacklistPath = "${arribaPath}/database/blacklist_hg38_GRCh38_v2.4.0.tsv.gz"
+
+    println "📂 Known fusions path set to: ${knownFusionsPath}"
+    println "📂 Blacklist path set to: ${blacklistPath}"
 }
 
+
+
+
+// ========================== VEP Cache Handling ========================== //
+    def vep_cache_ch
+
+    if (params.vep_cache_dir_path && file("${params.vep_cache_dir_path}").exists()) {
+        println "✅ VEP cache found in the server directory."
+        vep_cache_ch = Channel.of(file("${params.vep_cache_dir_path}"))
+
+    } else if (file("${params.actual_data_dir}/Tools/VEP").exists()) {
+        println "✅ VEP cache found in the publish directory."
+        vep_cache_ch = Channel.of(file("${params.actual_data_dir}/Tools/VEP"))
+
+    } else {
+        println "⚠️ VEP cache not found. Downloading..."
+        def result = DOWNLOAD_VEP_CACHE()
+        vep_cache_ch = result.vep_cache
+    }
+
+    // ========================== Capture VEP Cache Path ========================== //
+    vep_cache_ch.view { vep_cache_path ->  
+        vepCachePath = vep_cache_path.toString()
+        println "📂 VEP Cache path set to: ${vepCachePath}"
+    }
+
+// ========================== ClinVar VCF Handling ========================== //
+    def clinvar_vcf_ch, clinvar_tbi_ch
+
+    if (file("${params.clinvar_path}").exists() && file("${params.clinvartbi_path}").exists()) {
+        println "✅ ClinVar VCF and index found in the server directory."
+        clinvar_vcf_ch = Channel.of(file("${params.clinvar_path}"))
+        clinvar_tbi_ch = Channel.of(file("${params.clinvartbi_path}"))
+
+    } else if (file("${params.actual_data_dir}/Tools/VEP/clinvar.vcf.gz").exists() && 
+               file("${params.actual_data_dir}/Tools/VEP/clinvar.vcf.gz.tbi").exists()) {
+        println "✅ ClinVar VCF and index found in the publish directory."
+        clinvar_vcf_ch = Channel.of(file("${params.actual_data_dir}/Tools/VEP/clinvar.vcf.gz"))
+        clinvar_tbi_ch = Channel.of(file("${params.actual_data_dir}/Tools/VEP/clinvar.vcf.gz.tbi"))
+
+    } else {
+        println "⚠️ ClinVar VCF and index not found. Downloading..."
+        def result = DOWNLOAD_CLINVAR()
+        clinvar_vcf_ch = result.out[0]
+        clinvar_tbi_ch = result.out[1]
+    }
+
+    // ========================== Capture ClinVar Paths ========================== //
+    clinvar_vcf_ch.view { clinvar_vcf_path ->  
+        clinvarVcfPath = clinvar_vcf_path.toString()
+        println "📂 ClinVar VCF path set to: ${clinvarVcfPath}"
+    }
+
+    clinvar_tbi_ch.view { clinvar_tbi_path ->  
+        clinvarTbiPath = clinvar_tbi_path.toString()
+        println "📂 ClinVar VCF Index path set to: ${clinvarTbiPath}"
+    }
 
 
 
@@ -717,8 +862,12 @@ arriba_dir_ch.view { path ->
 			params.snpeff_jar = '${snpEffJarPath ?: 'NOT_FOUND'}'
             params.snpeff_config = '${snpEffConfigPath ?: 'NOT_FOUND'}'
 			params.snpeff_db = '${snpEffDbPath ?: 'NOT_FOUND'}'
-			params.arriba_tool = '${arribaPath ?: 'NOT_FOUND'}'
-			
+			params.arriba_tool_dir = '${arribaPath ?: 'NOT_FOUND'}'
+			params.arriba_known_fusions = '${knownFusionsPath ?: 'NOT_FOUND'}'
+			params.arriba_blacklist = '${blacklistPath ?: 'NOT_FOUND'}'
+			params.vep_cache_dir = '${vepCachePath ?: 'NOT_FOUND'}'
+			params.clinvar = '${clinvarVcfPath ?: 'NOT_FOUND'}'
+            params.clinvartbi = '${clinvarTbiPath ?: 'NOT_FOUND'}'
             """
 
             println "✅ Reference paths successfully written to ${configFile}"

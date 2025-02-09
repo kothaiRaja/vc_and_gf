@@ -87,7 +87,14 @@ process CHECK_OR_DOWNLOAD_GTF {
 
     script:
     """
-    wget -q -O annotations.gtf ${params.gtf_download_url}
+    wget -q -O annotations.gtf.gz ${params.gtf_download_url}
+
+    # Check if the file is gzipped and unzip if necessary
+    if file annotations.gtf.gz | grep -q 'gzip'; then
+        gunzip annotations.gtf.gz
+    else
+        mv annotations.gtf.gz annotations.gtf
+    fi
     """
 }
 
@@ -127,7 +134,14 @@ process CHECK_OR_DOWNLOAD_DENYLIST {
 
     script:
     """
-    wget -q -O denylist.bed ${params.denylist_download_url}
+    wget -q -O denylist.bed.gz ${params.denylist_download_url}
+
+    # Check if the file is gzipped and unzip if necessary
+    if file denylist.bed.gz | grep -q 'gzip'; then
+        gunzip denylist.bed.gz
+    else
+        mv denylist.bed.gz denylist.bed
+    fi
     """
 }
 
@@ -454,10 +468,17 @@ workflow {
             CHECK_OR_DOWNLOAD_REF_GENOME()
 
     // Capture the reference genome path from the published directory
-    genome_ch.view { path ->
-        referenceGenomePath = path.toString()
-        println "📂 Reference genome path set to: ${referenceGenomePath}"
+    genome_ch.view { genome_path ->  
+    if (genome_path.toString().contains('/work/')) {
+        // Force the path to the published directory
+        referenceGenomePath = "${params.actual_data_dir}/reference/genome.fa"
+    } else {
+        // If it’s already in the publish or server directory, keep it
+        referenceGenomePath = genome_path.toString()
     }
+    println "📂 Reference genome path set to: ${referenceGenomePath}"
+}
+
 
     // ========================== Reference Genome Index Handling ========================== //
     genome_index_ch = 
@@ -466,14 +487,21 @@ workflow {
         file("${params.actual_data_dir}/reference/genome.fa.fai").exists() ?
             Channel.of(file("${params.actual_data_dir}/reference/genome.fa.fai")) :
         params.genome_index_download_url ? 
-            DOWNLOAD_GENOME_INDEX.out.genome_fai :
+            DOWNLOAD_GENOME_INDEX() :
             CREATE_GENOME_INDEX(genome_ch)
 
     // Capture the genome index path from the published directory
-    genome_index_ch.view { path ->
-        genomeIndexPath = path.toString()
-        println "📂 Genome index path set to: ${genomeIndexPath}"
+	genome_index_ch.view { genome_index_path ->  
+	if (genome_index_path.toString().contains('/work/')) {
+		// Force the path to the published directory
+		genomeIndexPath = "${params.actual_data_dir}/reference/genome.fa.fai"
+	} else {
+        // If it's already in the publish or server directory, keep the original path
+        genomeIndexPath = genome_index_path.toString()
     }
+    println "📂 Genome index path set to: ${genomeIndexPath}"
+}
+
 	
 	// ========================== Reference Genome Dictionary Handling ========================== //
     genome_dict_ch = 
@@ -484,10 +512,17 @@ workflow {
             CREATE_GENOME_DICT(genome_ch)
 
     // Capture the genome dictionary path from the published directory
-    genome_dict_ch.view { path ->
-        genomeDictPath = path.toString()
-        println "📂 Genome dictionary path set to: ${genomeDictPath}"
+	genome_dict_ch.view { genome_dict_path ->  
+    if (genome_dict_path.toString().contains('/work/')) {
+        // Force the path to the published directory
+        genomeDictPath = "${params.actual_data_dir}/reference/genome.dict"
+    } else {
+        // If it's already in the publish or server directory, keep the original path
+        genomeDictPath = genome_dict_path.toString()
     }
+    println "📂 Genome dictionary path set to: ${genomeDictPath}"
+}
+
 	
 	// ========================== GTF Annotation File Handling ========================== //
     gtf_ch = 
@@ -498,10 +533,17 @@ workflow {
             CHECK_OR_DOWNLOAD_GTF()
 
     // Capture the GTF annotation path from the published directory
-    gtf_ch.view { path ->
-        gtfPath = path.toString()
-        println "📂 GTF annotation path set to: ${gtfPath}"
+gtf_ch.view { gtf_path ->  
+    if (gtf_path.toString().contains('/work/')) {
+        // Force the path to the published directory
+        gtfPath = "${params.actual_data_dir}/reference/annotations.gtf"
+    } else {
+        // If it's already in the publish or server directory, keep the original path
+        gtfPath = gtf_path.toString()
     }
+    println "📂 GTF annotation path set to: ${gtfPath}"
+}
+
 	
 	// ========================== STAR Genome Index Handling ========================== //
     star_index_ch = 
@@ -512,10 +554,17 @@ workflow {
             CREATE_STAR_INDEX(genome_ch, gtf_ch)
 
     // Capture the STAR genome index path from the published directory
-    star_index_ch.view { path ->
-        starIndexPath = path.toString()
-        println "📂 STAR genome index path set to: ${starIndexPath}"
+star_index_ch.view { star_index_path ->  
+    if (star_index_path.toString().contains('/work/')) {
+        // Force the path to the published directory
+        starIndexPath = "${params.actual_data_dir}/reference/STAR_index"
+    } else {
+        // If it's already in the publish or server directory, keep the original path
+        starIndexPath = star_index_path.toString()
     }
+    println "📂 STAR genome index path set to: ${starIndexPath}"
+}
+
 	
 	// ========================== Denylist File Handling ========================== //
     denylist_ch = 
@@ -526,10 +575,17 @@ workflow {
             CHECK_OR_DOWNLOAD_DENYLIST()
 
     // Capture the denylist path from the published directory
-    denylist_ch.view { path ->
-        denylistPath = path.toString()
-        println "📂 Denylist BED file path set to: ${denylistPath}"
+denylist_ch.view { denylist_path ->  
+    if (denylist_path.toString().contains('/work/')) {
+        // Force the path to the published directory
+        denylistPath = "${params.actual_data_dir}/reference/denylist.bed"
+    } else {
+        // If it's already in the publish or server directory, keep the original path
+        denylistPath = denylist_path.toString()
     }
+    println "📂 Denylist BED file path set to: ${denylistPath}"
+}
+
 	
 	// ========================== SNP VCF Handling ========================== //
     snp_vcf_ch = 
@@ -541,10 +597,17 @@ workflow {
 	
 	//Capture the snps path from published directory
 	
-	snp_vcf_ch.view { snp_vcf_path ->  // Changed variable name to 'snp_vcf_path'
-    snpVcfPath = snp_vcf_path.toString()
+	snp_vcf_ch.view { snp_vcf_path ->  
+    if (snp_vcf_path.toString().contains('/work/')) {
+        // Force the path to the published directory
+        snpVcfPath = "${params.actual_data_dir}/reference/variants_snp.vcf.gz"
+    } else {
+        // If it's already in the publish or server directory, keep the original path
+        snpVcfPath = snp_vcf_path.toString()
+    }
     println "📂 SNP VCF path set to: ${snpVcfPath}"
 }
+
 
     // ========================== SNP Index Handling ========================== //
     snp_index_ch = 
@@ -554,13 +617,19 @@ workflow {
         Channel.of(file("${params.actual_data_dir}/reference/variants_snp.vcf.gz.tbi")) :
     params.variants_snp_index_download_url ? 
         DOWNLOAD_VARIANTS_SNP_INDEX() :
-        INDEX_SNP_VCF(snp_vcf_ch).snp_index
+        INDEX_SNP_VCF(snp_vcf_ch)
 			
-	// Capture the SNP Index path from the published directory
 	snp_index_ch.view { snp_index_path ->  
-    snpIndexPath = snp_index_path.toString()
+    if (snp_index_path.toString().contains('/work/')) {
+        // Force the path to the published directory
+        snpIndexPath = "${params.actual_data_dir}/reference/variants_snp.vcf.gz.tbi"
+    } else {
+        // If it's already in the publish or server directory, keep the original path
+        snpIndexPath = snp_index_path.toString()
+    }
     println "📂 SNP Index path set to: ${snpIndexPath}"
 }
+
 
 	// ========================== Indels VCF Handling ========================== //
 
@@ -571,10 +640,14 @@ workflow {
             Channel.of(file("${params.actual_data_dir}/reference/variants_indels.vcf.gz")) :
             CHECK_OR_DOWNLOAD_VARIANTS_INDELS()
 			
-	//Capture the indels path from published directory
-	
 	indels_vcf_ch.view { indels_vcf_path ->  
-    indelsVcfPath = indels_vcf_path.toString()
+    if (indels_vcf_path.toString().contains('/work/')) {
+        // Force the path to the published directory
+        indelsVcfPath = "${params.actual_data_dir}/reference/variants_indels.vcf.gz"
+    } else {
+        // If it's already in the publish or server directory, keep the original path
+        indelsVcfPath = indels_vcf_path.toString()
+    }
     println "📂 Indels VCF path set to: ${indelsVcfPath}"
 }
 
@@ -589,11 +662,17 @@ workflow {
         DOWNLOAD_VARIANTS_INDELS_INDEX() :
         INDEX_INDEL_VCF(indels_vcf_ch).indels_index
 		
-	// Capture the Indels Index path from the published directory
 	indels_index_ch.view { indels_index_path ->  
-    indelsIndexPath = indels_index_path.toString()
+    if (indels_index_path.toString().contains('/work/')) {
+        // Redirect to the published directory
+        indelsIndexPath = "${params.actual_data_dir}/reference/variants_indels.vcf.gz.tbi"
+    } else {
+        // Keep the original path if it's from the server or already published
+        indelsIndexPath = indels_index_path.toString()
+    }
     println "📂 Indels Index path set to: ${indelsIndexPath}"
 }
+
 
 	// ========================== Filter and Merge VCFs ========================== //
     
@@ -623,16 +702,29 @@ workflow {
     // ========================== Capture Merged VCF Paths ========================== //
 
     // Capture merged VCF path
-    merged_vcf_ch.view { merged_vcf_path ->
+merged_vcf_ch.view { merged_vcf_path ->
+    if (merged_vcf_path.toString().contains('/work/')) {
+        // Redirect to the published directory
+        mergedVcfPath = "${params.actual_data_dir}/reference/merged.filtered.recode.vcf.gz"
+    } else {
+        // Keep the original path if it's from the server or already published
         mergedVcfPath = merged_vcf_path.toString()
-        println "📂 Merged VCF path set to: ${mergedVcfPath}"
     }
+    println "📂 Merged VCF path set to: ${mergedVcfPath}"
+}
 
-    // Capture merged VCF index path
-    merged_vcf_index_ch.view { merged_vcf_index_path ->
+// Capture merged VCF index path
+merged_vcf_index_ch.view { merged_vcf_index_path ->
+    if (merged_vcf_index_path.toString().contains('/work/')) {
+        // Redirect to the published directory
+        mergedVcfIndexPath = "${params.actual_data_dir}/reference/merged.filtered.recode.vcf.gz.tbi"
+    } else {
+        // Keep the original path if it's from the server or already published
         mergedVcfIndexPath = merged_vcf_index_path.toString()
-        println "📂 Merged VCF Index path set to: ${mergedVcfIndexPath}"
     }
+    println "📂 Merged VCF Index path set to: ${mergedVcfIndexPath}"
+}
+
 	
 	// ========================== Java Version Check ========================== //
 
@@ -690,15 +782,30 @@ workflow {
 
     // ========================== Capture SnpEff Paths ========================== //
 
-    snpeff_jar_ch.view { snpeff_jar_path ->  
+    // Capture SnpEff JAR path
+snpeff_jar_ch.view { snpeff_jar_path ->  
+    if (snpeff_jar_path.toString().contains('/work/')) {
+        // Redirect to the published directory
+        snpEffJarPath = "${params.actual_data_dir}/Tools/snpEff/snpEff.jar"
+    } else {
+        // Keep the original path if it's from the server or already published
         snpEffJarPath = snpeff_jar_path.toString()
-        println "📂 SnpEff JAR path set to: ${snpEffJarPath}"
     }
+    println "📂 SnpEff JAR path set to: ${snpEffJarPath}"
+}
 
-    snpeff_config_ch.view { snpeff_config_path ->  
+// Capture SnpEff Config path
+snpeff_config_ch.view { snpeff_config_path ->  
+    if (snpeff_config_path.toString().contains('/work/')) {
+        // Redirect to the published directory
+        snpEffConfigPath = "${params.actual_data_dir}/Tools/snpEff/snpEff.config"
+    } else {
+        // Keep the original path if it's from the server or already published
         snpEffConfigPath = snpeff_config_path.toString()
-        println "📂 SnpEff Config path set to: ${snpEffConfigPath}"
     }
+    println "📂 SnpEff Config path set to: ${snpEffConfigPath}"
+}
+
 	
 	// ========================== SnpEff Database Handling ========================== //
 
@@ -718,7 +825,7 @@ workflow {
 
 	} else {
 		println "⚠️ SnpEff database not found. Downloading..."
-		def result = DOWNLOAD_SNPEFF_DB(genome: params.genomedb, snpeff_jar_path: snpeff_jar_ch)
+		def result = DOWNLOAD_SNPEFF_DB(params.genomedb, snpeff_jar_ch)
 
 		snpeff_db_ch = result
 		snpEffDbPath = "${params.actual_data_dir}/Tools/snpEff/${params.genomedb}"
@@ -726,10 +833,18 @@ workflow {
 
 // ========================== Capture SnpEff Database Path ========================== //
 
-	snpeff_db_ch.view { snpeff_db_path ->  
-		snpEffDbPath = snpeff_db_path.toString()
-		println "📂 SnpEff Database path set to: ${snpEffDbPath}"
+	// Capture SnpEff Database path
+snpeff_db_ch.view { snpeff_db_path ->  
+    if (snpeff_db_path.toString().contains('/work/')) {
+        // Redirect to the published directory
+        snpEffDbPath = "${params.actual_data_dir}/Tools/snpEff/${params.genomedb}"
+    } else {
+        // Keep the original path if it's from the server or already published
+        snpEffDbPath = snpeff_db_path.toString()
+    }
+    println "📂 SnpEff Database path set to: ${snpEffDbPath}"
 }
+
 
 // ========================== Arriba Tool Handling ========================== //
 
@@ -793,10 +908,17 @@ arriba_dir_ch.view { arriba_dir_path ->
     }
 
     // ========================== Capture VEP Cache Path ========================== //
-    vep_cache_ch.view { vep_cache_path ->  
+vep_cache_ch.view { vep_cache_path ->  
+    if (vep_cache_path.toString().contains('/work/')) {
+        // Redirect to the published directory
+        vepCachePath = "${params.actual_data_dir}/Tools/VEP"
+    } else {
+        // Keep the original path if it's from the server or already published
         vepCachePath = vep_cache_path.toString()
-        println "📂 VEP Cache path set to: ${vepCachePath}"
     }
+    println "📂 VEP Cache path set to: ${vepCachePath}"
+}
+
 
 // ========================== ClinVar VCF Handling ========================== //
     def clinvar_vcf_ch, clinvar_tbi_ch
@@ -821,14 +943,27 @@ arriba_dir_ch.view { arriba_dir_path ->
 
     // ========================== Capture ClinVar Paths ========================== //
     clinvar_vcf_ch.view { clinvar_vcf_path ->  
+    if (clinvar_vcf_path.toString().contains('/work/')) {
+        // Redirect to the published directory
+        clinvarVcfPath = "${params.actual_data_dir}/Tools/VEP/clinvar.vcf.gz"
+    } else {
+        // Keep the original path if it's from the server or already published
         clinvarVcfPath = clinvar_vcf_path.toString()
-        println "📂 ClinVar VCF path set to: ${clinvarVcfPath}"
     }
+    println "📂 ClinVar VCF path set to: ${clinvarVcfPath}"
+}
 
-    clinvar_tbi_ch.view { clinvar_tbi_path ->  
+clinvar_tbi_ch.view { clinvar_tbi_path ->  
+    if (clinvar_tbi_path.toString().contains('/work/')) {
+        // Redirect to the published directory
+        clinvarTbiPath = "${params.actual_data_dir}/Tools/VEP/clinvar.vcf.gz.tbi"
+    } else {
+        // Keep the original path if it's from the server or already published
         clinvarTbiPath = clinvar_tbi_path.toString()
-        println "📂 ClinVar VCF Index path set to: ${clinvarTbiPath}"
     }
+    println "📂 ClinVar VCF Index path set to: ${clinvarTbiPath}"
+}
+
 
 
 

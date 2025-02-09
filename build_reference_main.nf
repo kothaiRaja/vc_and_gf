@@ -811,24 +811,38 @@ snpeff_config_ch.view { snpeff_config_path ->
 
 	def snpeff_db_ch  // Channel to handle the database path dynamically
 
-	if (params.snpeff_db_dir && file("${params.snpeff_db_dir_path}/${params.genomedb}").exists()) {
-		println "✅ SnpEff database for ${params.genomedb} found in the server directory. Skipping download."
+if (params.snpeff_db_dir && file("${params.snpeff_db_dir_path}/${params.genomedb}").exists()) {
+    println "✅ SnpEff database for ${params.genomedb} found in the server directory. Skipping download."
 
-		snpeff_db_ch = Channel.of(file("${params.snpeff_db_dir_path}/${params.genomedb}"))
-		snpEffDbPath = "${params.snpeff_db_dir}/${params.genomedb}"
+    snpeff_db_ch = Channel.of(file("${params.snpeff_db_dir_path}/${params.genomedb}"))
+    snpEffDbPath = "${params.snpeff_db_dir_path}/${params.genomedb}"
 
-	} else if (file("${params.actual_data_dir}/Tools/snpEff/${params.genomedb}").exists()) {
-		println "✅ SnpEff database found in the publish directory. Skipping download."
+} else if (file("${params.actual_data_dir}/Tools/snpEff/snpEff/data/${params.genomedb}").exists()) {
+    println "✅ SnpEff database found in the publish directory. Skipping download."
 
-		snpeff_db_ch = Channel.of(file("${params.actual_data_dir}/Tools/snpEff/${params.genomedb}"))
-		snpEffDbPath = "${params.actual_data_dir}/Tools/snpEff/${params.genomedb}"
+    snpeff_db_ch = Channel.of(file("${params.actual_data_dir}/Tools/snpEff/snpEff/data/${params.genomedb}"))
+    snpEffDbPath = "${params.actual_data_dir}/Tools/snpEff/snpEff/data/${params.genomedb}"
 
-	} else {
-		println "⚠️ SnpEff database not found. Downloading..."
-		def result = DOWNLOAD_SNPEFF_DB(params.genomedb, snpeff_jar_ch)
+} else {
+    println "⚠️ SnpEff database not found. Downloading..."
+    def result = DOWNLOAD_SNPEFF_DB(params.genomedb, snpeff_jar_ch)
 
-		snpeff_db_ch = result
-		snpEffDbPath = "${params.actual_data_dir}/Tools/snpEff/${params.genomedb}"
+    snpeff_db_ch = result
+    snpEffDbPath = "${params.actual_data_dir}/Tools/snpEff/snpEff/data/${params.genomedb}"
+}
+
+// ========================== Capture SnpEff Database Path ========================== //
+
+// Capture SnpEff Database path
+snpeff_db_ch.view { snpeff_db_path ->  
+    if (snpeff_db_path.toString().contains('/work/')) {
+        // Redirect to the published directory
+        snpEffDbPath = "${params.actual_data_dir}/Tools/snpEff/snpEff/data/${params.genomedb}"
+    } else {
+        // Keep the original path if it's from the server or already published
+        snpEffDbPath = snpeff_db_path.toString()
+    }
+    println "📂 SnpEff Database path set to: ${snpEffDbPath}"
 }
 
 // ========================== Capture SnpEff Database Path ========================== //

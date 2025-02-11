@@ -845,19 +845,6 @@ snpeff_db_ch.view { snpeff_db_path ->
     println "📂 SnpEff Database path set to: ${snpEffDbPath}"
 }
 
-// ========================== Capture SnpEff Database Path ========================== //
-
-	// Capture SnpEff Database path
-snpeff_db_ch.view { snpeff_db_path ->  
-    if (snpeff_db_path.toString().contains('/work/')) {
-        // Redirect to the published directory
-        snpEffDbPath = "${params.actual_data_dir}/Tools/snpEff/${params.genomedb}"
-    } else {
-        // Keep the original path if it's from the server or already published
-        snpEffDbPath = snpeff_db_path.toString()
-    }
-    println "📂 SnpEff Database path set to: ${snpEffDbPath}"
-}
 
 
 // ========================== Arriba Tool Handling ========================== //

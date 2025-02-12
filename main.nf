@@ -1000,6 +1000,18 @@ process MULTIQC_REPORT {
     """
 }
 
+process MultiQC_quality {
+  publishDir "${params.outdir}/multiqc_quality", mode: "copy"
+  container "https://depot.galaxyproject.org/singularity/multiqc%3A1.24.1--pyhdfd78af_0"
+  input:
+    path report_files
+  output:
+    path "multiqc_report.html", emit: report
+  """
+  multiqc ${report_files.join(' ')} -o .
+  """
+}
+
 //===========================================STAR Fusion=============================================//
 process STAR_ALIGN_FUSION {
     tag { sample_id }
@@ -1162,6 +1174,18 @@ workflow {
     qc_results_ch = FASTQC_RAW(concatenated_reads_ch)
     trimmed_reads_ch = TRIM_READS(concatenated_reads_ch)
 	
+	// Extract FastQC file paths (flatten both .zip and .html files)
+	qc_files_ch = qc_results_ch.map { it[1] + it[2] }.flatten()
+
+	// Extract Fastp file paths (exclude sample name)
+	fastp_files_ch = trimmed_reads_ch.fastp_reports.map { it[1..-1] }.flatten()
+
+	// Combine FastQC and Fastp channels
+	combined_channel = qc_files_ch.concat(fastp_files_ch).collect()
+
+	// Pass combined file paths to MultiQC
+	multiqc_quality = MultiQC_quality(combined_channel)
+
 	trimmed_reads_ch.fastp_reports.view { "Fastp reports passed to MultiQC: ${it}" }
 
 
@@ -1258,12 +1282,12 @@ workflow {
 }
 
 	multiqc_results = MULTIQC_REPORT(
-    fastqc_results = qc_results_ch.map { [it[1], it[2]] }.flatten(),   // Flatten to separate paths
+    fastqc_results = qc_results_ch.map { [it[1], it[2]] }.flatten(),   
     fastp_reports = trimmed_reads_ch.fastp_reports.map { [it[1], it[2]] }.flatten(),
     star_logs = star_aligned_ch.map { [it[2], it[3], it[4]] }.flatten(),
-    samtools_flagstat = alignment_stats.map { it[1] },  // Already a single file, no need to flatten
-    gatk_metrics = marked_bams.map { it[4] },  // Single file
-    bcftools_stats = bcftools_stats_ch.map { it[2] }  // Single file
+    samtools_flagstat = alignment_stats.map { it[1] },  
+    gatk_metrics = marked_bams.map { it[4] },  
+    bcftools_stats = bcftools_stats_ch.map { it[2] } 
 	)
      
 		println "MultiQC report generated: ${multiqc_results}"

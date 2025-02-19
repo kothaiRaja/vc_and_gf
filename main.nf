@@ -1,83 +1,13 @@
 nextflow.enable.dsl = 2
 
-process CONCAT_FASTQ {
-    tag { sample_id }
-    container "https://depot.galaxyproject.org/singularity/ubuntu%3A24.04"
-    publishDir "${params.outdir}/concatenated", mode: "copy"
+// Import subworkflows
+include { PREPROCESSING } from './Subworkflows/preprocessing.nf'
 
-    input:
-    tuple val(sample_id), path(reads), val(strandedness)
 
-    output:
-    tuple val(sample_id), path("${sample_id}_R1.merged.fastq.gz"), path("${sample_id}_R2.merged.fastq.gz"), val(strandedness), emit: merged_reads
 
-    script:
-    """
-    echo "Processing reads for sample: ${sample_id}"
-    ls -l ${reads.join(' ')}
 
-    R1_FILES=(\$(ls ${reads.join(' ')} | grep -E '_R1|read1' || true))
-    R2_FILES=(\$(ls ${reads.join(' ')} | grep -E '_R2|read2' || true))
 
-    if [[ \${#R1_FILES[@]} -gt 1 || \${#R2_FILES[@]} -gt 1 ]]; then
-        echo "Multiple files detected. Concatenating..."
-        cat \${R1_FILES[@]} | gzip > ${sample_id}_R1.merged.fastq.gz
-        cat \${R2_FILES[@]} | gzip > ${sample_id}_R2.merged.fastq.gz
-        echo "Merging complete for sample: ${sample_id}"
-    else
-        echo "Only one file per read direction detected. Skipping concatenation..."
-        cp \${R1_FILES[0]:-${reads[0]}} ${sample_id}_R1.merged.fastq.gz
-        cp \${R2_FILES[0]:-${reads[1]}} ${sample_id}_R2.merged.fastq.gz
-        echo "Files copied as-is for sample: ${sample_id}"
-    fi
-    """
-}
 
-process FASTQC_RAW {
-    tag { sample_id }
-    publishDir "${params.outdir}/multiqc_input", mode: "copy", pattern: "*_fastqc.*"
-    container "https://depot.galaxyproject.org/singularity/fastqc%3A0.12.1--hdfd78af_0"
-
-    input:
-    tuple val(sample_id), path(r1), path(r2), val(strandedness)
-
-    output:
-    tuple val(sample_id), path("*.zip"), path("*.html"), val(strandedness), emit: qc_results
-
-    script:
-    """
-    fastqc ${r1} ${r2} --outdir .
-    """
-}
-
-process TRIM_READS {
-    tag { sample_id }
-    container "https://depot.galaxyproject.org/singularity/fastp%3A0.23.4--h125f33a_5"
-    publishDir "${params.outdir}/multiqc_input", mode: "copy", pattern: "*_fastp.*"
-
-    input:
-    tuple val(sample_id), path(r1), path(r2), val(strandedness)
-
-    output:
-    tuple val(sample_id), path("trimmed_${sample_id}_R1.fastq.gz"), path("trimmed_${sample_id}_R2.fastq.gz"), val(strandedness), emit: trimmed_reads
-    tuple val(sample_id), path("${sample_id}_fastp.html"), path("${sample_id}_fastp.json"), emit: fastp_reports
-
-    script:
-    """
-    fastp -i ${r1} -I ${r2} \
-      -o trimmed_${sample_id}_R1.fastq.gz \
-      -O trimmed_${sample_id}_R2.fastq.gz \
-      --detect_adapter_for_pe \
-      --adapter_sequence auto \
-      --adapter_sequence_r2 auto \
-      --length_required 50 \
-      --cut_front --cut_tail \
-      --cut_window_size 4 \
-      --cut_mean_quality 20 \
-      --html ${sample_id}_fastp.html \
-      --json ${sample_id}_fastp.json
-    """
-}
 
 process STAR_ALIGNMENT {
     tag { sample_id }
@@ -1000,17 +930,7 @@ process MULTIQC_REPORT {
 
 
 
-process MultiQC_quality {
-  publishDir "${params.outdir}/multiqc_quality", mode: "copy"
-  container "https://depot.galaxyproject.org/singularity/multiqc%3A1.24.1--pyhdfd78af_0"
-  input:
-    path report_files
-  output:
-    path "multiqc_report.html", emit: report
-  """
-  multiqc ${report_files.join(' ')} -o .
-  """
-}
+
 
 //===========================================STAR Fusion=============================================//
 process STAR_ALIGN_FUSION {
@@ -1170,22 +1090,17 @@ workflow {
 
     //==================================== Preprocessing ====================================//
     
-    samples_ch = Channel.fromPath(params.samplesheet)
-        .splitCsv(header: true)
-        .map { row -> tuple(row.sample_id, [file(row.fastq_1), file(row.fastq_2)], row.strandedness) }
+    // ✅ Correctly pass `samplesheet` into the PREPROCESSING workflow
+    PREPROCESSING(params.samplesheet)
 
-    concatenated_reads_ch = params.concatenate ? 
-        CONCAT_FASTQ(samples_ch) : 
-        samples_ch.map { sample_id, reads, strandedness -> tuple(sample_id, reads[0], reads[1], strandedness) }
+    // ✅ Assign outputs correctly
+    trimmed_reads_ch  = PREPROCESSING.out.trimmed_reads
+    fastp_reports_ch  = PREPROCESSING.out.fastp_reports
+    qc_results_ch     = PREPROCESSING.out.qc_reports
+    multiqc_quality   = PREPROCESSING.out.multiqc
+	
 
-    qc_results_ch = FASTQC_RAW(concatenated_reads_ch)
-    trimmed_reads_ch = TRIM_READS(concatenated_reads_ch)
-
-    qc_files_ch = qc_results_ch.map { it[1] + it[2] }.flatten()
-    fastp_files_ch = trimmed_reads_ch.fastp_reports.map { it[1..-1] }.flatten()
-    combined_channel = qc_files_ch.concat(fastp_files_ch).collect()
-    multiqc_quality = MultiQC_quality(combined_channel)
-
+	
     if (params.only_qc) {
         log.info("Running only QC pipeline...")
         return
@@ -1345,7 +1260,7 @@ workflow {
 
         //========================= Variant Calling Workflow =========================//
         // Step 1: Align reads to reference genome using STAR
-        star_aligned_ch = STAR_ALIGNMENT(trimmed_reads_ch[0], params.star_genome_index)
+        star_aligned_ch = STAR_ALIGNMENT(trimmed_reads_ch, params.star_genome_index)
 
         // Step 2: Sort and index BAM files
         sorted_bams = SAMTOOLS_SORT_INDEX(star_aligned_ch.map { tuple(it[0], it[1], it[5]) })
@@ -1461,7 +1376,7 @@ workflow {
         // Step 23: Run MultiQC to aggregate QC results
         multiqc_results = MULTIQC_REPORT(
             fastqc_results = qc_results_ch.map { [it[1], it[2]] }.flatten().collect(),
-            fastp_reports = trimmed_reads_ch.fastp_reports.map { [it[1], it[2]] }.flatten().collect(),
+            fastp_reports = fastp_reports_ch.map { [it[1], it[2]] }.flatten().collect(),
             star_logs = star_aligned_ch.map { [it[2], it[3], it[4]] }.flatten().collect(),
             samtools_flagstat = alignment_stats.map { it[1] }.flatten().collect(),
             gatk_metrics = marked_bams.map { it[4] }.flatten().collect(),
@@ -1471,7 +1386,7 @@ workflow {
     //==================================== Gene Fusion Detection ====================================//
 
         // Step 24: Perform STAR alignment for fusion detection
-        star_align_fusion_ch = STAR_ALIGN_FUSION(trimmed_reads_ch[0], params.star_genome_index, params.gtf_annotation)
+        star_align_fusion_ch = STAR_ALIGN_FUSION(trimmed_reads_ch, params.star_genome_index, params.gtf_annotation)
 
         // Step 25: Detect fusions using ARRIBA
         ARRIBA_ch = ARRIBA(star_align_fusion_ch, params.reference_genome, params.gtf_annotation, 

@@ -1163,101 +1163,104 @@ process ARRIBA_VISUALIZATION {
 
 
 workflow {
+
+    if (params.only_variant_calling && params.only_fusion_detection) {
+        error "You cannot enable both only_variant_calling and only_fusion_detection at the same time. Set one to false."
+    }
+
     //==================================== Preprocessing ====================================//
     
-    // Step 1: Read samplesheet
     samples_ch = Channel.fromPath(params.samplesheet)
         .splitCsv(header: true)
         .map { row -> tuple(row.sample_id, [file(row.fastq_1), file(row.fastq_2)], row.strandedness) }
 
-    // Step 2: Concatenate FASTQ files if required
     concatenated_reads_ch = params.concatenate ? 
         CONCAT_FASTQ(samples_ch) : 
         samples_ch.map { sample_id, reads, strandedness -> tuple(sample_id, reads[0], reads[1], strandedness) }
 
-    // Step 3: Perform FastQC on raw reads
     qc_results_ch = FASTQC_RAW(concatenated_reads_ch)
-
-    // Step 4: Trim reads using Fastp
     trimmed_reads_ch = TRIM_READS(concatenated_reads_ch)
 
-    // Step 5: Collect QC reports for MultiQC
     qc_files_ch = qc_results_ch.map { it[1] + it[2] }.flatten()
     fastp_files_ch = trimmed_reads_ch.fastp_reports.map { it[1..-1] }.flatten()
     combined_channel = qc_files_ch.concat(fastp_files_ch).collect()
     multiqc_quality = MultiQC_quality(combined_channel)
-    
-    trimmed_reads_ch.fastp_reports.view { "Fastp reports passed to MultiQC: ${it}" }
-    
+
     if (params.only_qc) {
-        qc_results_ch.view { "QC results for sample: ${it}" }
-    } else {
+        log.info("Running only QC pipeline...")
+        return
+    }
 
-    //==================================== Alignment ====================================//
+    //==================================== Run Specific Pipelines ====================================//
 
-        // Step 6: Align reads to reference genome using STAR
+    if (params.only_variant_calling) {
+        log.info("Running only Variant Calling pipeline...")
+
+        //==================================== Alignment ====================================//
+
+        // Step 1: Align reads to reference genome using STAR
         star_aligned_ch = STAR_ALIGNMENT(trimmed_reads_ch[0], params.star_genome_index)
 
-        // Step 7: Sort and index BAM files
+        // Step 2: Sort and index BAM files
         sorted_bams = SAMTOOLS_SORT_INDEX(star_aligned_ch.map { tuple(it[0], it[1], it[5]) })
 
-        // Step 8: Filter orphan reads
+        // Step 3: Filter orphan reads
         filtered_bams = SAMTOOLS_FILTER_ORPHANS(sorted_bams)
 
-        // Step 9: Generate alignment statistics
+        // Step 4: Generate alignment statistics
         alignment_stats = SAMTOOLS_FLAGSTAT(filtered_bams)
 
-        // Step 10: Mark duplicates
+        // Step 5: Mark duplicates
         marked_bams = GATK_MARK_DUPLICATES(filtered_bams)
         marked_bams.view { "Mark Duplicates Output: $it" }
 
     //==================================== Variant Calling ====================================//
 
-        // Step 11: Split N CIGAR reads
+        // Step 6: Split N CIGAR reads
         split_bams = SPLIT_NCIGAR_READS(marked_bams.map { 
             tuple(it[0], it[1], it[2], it[3]) }, 
             params.reference_genome, params.reference_genome_index, params.reference_genome_dict
         )
 
-        // Step 12: Apply SAMTOOLS CALMD
+        // Step 7: Apply SAMTOOLS CALMD
         calmd_ch = SAMTOOLS_CALMD(split_bams.map { tuple(it[0], it[1], it[2], it[3]) }, 
             params.reference_genome, params.reference_genome_index
         )
 
-        // Step 13: Recalibrate and Apply BQSR
+        // Step 8: Recalibrate and Apply BQSR
         recalibrated_bams = GATK_RECALIBRATION(calmd_ch.map { 
             tuple(it[0], it[1], it[2], it[3]) }, 
             params.reference_genome, params.reference_genome_index, params.reference_genome_dict, 
             params.merged_vcf, params.merged_vcf_index
         )
 
-        // Step 14: Convert BED to interval list
+        // Step 9: Convert BED to interval list
         interval_list_ch = BED_TO_INTERVAL_LIST(params.denylist_bed, params.reference_genome, params.reference_genome_dict)
 
-        // Step 15: Scatter the Interval List
+        // Step 10: Scatter the Interval List
         scattered_intervals_ch = SCATTER_INTERVAL_LIST(interval_list_ch, params.reference_genome_dict)
 
-        // Step 16: Perform variant calling using GATK HaplotypeCaller
+        // Step 11: Perform variant calling using GATK HaplotypeCaller
         gvcf_output = GATK_HAPLOTYPE_CALLER(recalibrated_bams.map {
             tuple(it[0], it[1], it[2], it[3]) 
         }, params.reference_genome, params.reference_genome_index, params.reference_genome_dict, scattered_intervals_ch)
 
         gvcf_output.view { "Raw GVCF output: $it" }
 
-        // Step 17: Generate variant statistics
+        // Step 12: Generate variant statistics
         bcftools_stats_ch = BCFTOOLS_STATS(gvcf_output)
 
     //==================================== Variant Filtering ====================================//
 
-        // Step 18: Apply GATK Variant Filtering
+        // Step 13: Apply GATK Variant Filtering
         filtered_individual_vcfs = GATK_VARIANT_FILTER(gvcf_output, 
             params.reference_genome, params.reference_genome_index, params.reference_genome_dict
         )
 
-        // Step 19: Query variant statistics
+        // Step 14: Query variant statistics
         filtered_vcf_stats = BCFTOOLS_QUERY(filtered_individual_vcfs)
 
-        // Step 20: Collect filtered VCF paths
+        // Step 15: Collect filtered VCF paths
         filtered_vcf = filtered_individual_vcfs
             .map { it[1] } // Extract paths to filtered VCF files
             .collect()      // Collect into a list
@@ -1267,38 +1270,38 @@ workflow {
     //==================================== Variant Annotation ====================================//
 
         if (params.merge_vcf) {
-            // Step 21: Merge filtered VCFs
+            // Step 16: Merge filtered VCFs
             merged_filtered_vcfs = BCFTOOLS_MERGE(filtered_vcf)
 
-            // Step 22: Annotate the merged VCF using snpEff
+            // Step 17: Annotate the merged VCF using snpEff
             annotated_merged_vcf = ANNOTATE_VARIANTS(merged_filtered_vcfs, 
                 params.snpeff_jar, params.snpeff_config, params.snpeff_db, params.genomedb
             )
 
-            // Step 23: Annotate merged VCF using Ensembl VEP
+            // Step 18: Annotate merged VCF using Ensembl VEP
             annotated_merged_vcf_ensemblvep = ANNOTATEVARIANTS_VEP(merged_filtered_vcfs, 
                 params.vep_cache_dir, params.clinvar, params.clinvartbi
             )
 
             println "Merging and annotating VCF files completed."
 
-            // Step 24: Convert merged VCF to table format
+            // Step 19: Convert merged VCF to table format
             table_creation = EXTRACT_VCF(annotated_merged_vcf)
 
             println "Table creation from merged VCF completed."
 
         } else {
-            // Step 25: Annotate individual VCFs using snpEff
+            // Step 20: Annotate individual VCFs using snpEff
             annotated_individual_vcfs = ANNOTATE_INDIVIDUAL_VARIANTS(filtered_individual_vcfs, 
                 params.snpeff_jar, params.snpeff_config, params.snpeff_db, params.genomedb
             )
 
-            // Step 26: Annotate individual VCFs using Ensembl VEP
+            // Step 21: Annotate individual VCFs using Ensembl VEP
             annotated_individual_vcf_ensemblvep = ANNOTATE_INDIVIDUAL_VARIANTS_VEP(filtered_individual_vcfs, 
                 params.vep_cache_dir, params.clinvar, params.clinvartbi
             )
 
-            // Step 27: Convert individual VCFs to table format
+            // Step 22: Convert individual VCFs to table format
             csv_individual_vcf = EXTRACT_individual_VCF(annotated_individual_vcfs.map {
                 tuple(it[0], it[1], it[2])
             })
@@ -1309,7 +1312,153 @@ workflow {
 
     //==================================== MultiQC Report ====================================//
 
-        // Step 28: Run MultiQC to aggregate QC results
+        // Step 23: Run MultiQC to aggregate QC results
+        multiqc_results = MULTIQC_REPORT(
+            fastqc_results = qc_results_ch.map { [it[1], it[2]] }.flatten().collect(),
+            fastp_reports = trimmed_reads_ch.fastp_reports.map { [it[1], it[2]] }.flatten().collect(),
+            star_logs = star_aligned_ch.map { [it[2], it[3], it[4]] }.flatten().collect(),
+            samtools_flagstat = alignment_stats.map { it[1] }.flatten().collect(),
+            gatk_metrics = marked_bams.map { it[4] }.flatten().collect(),
+            bcftools_stats = bcftools_stats_ch.map { it[2] }.flatten().collect()
+        )
+
+
+    }
+
+    else if (params.only_fusion_detection) {
+        log.info("Running only Gene Fusion Detection pipeline...")
+		//Step 1: STAR Align Fusion
+        star_align_fusion_ch = STAR_ALIGN_FUSION(trimmed_reads_ch[0], params.star_genome_index, params.gtf_annotation)
+		
+		//Step 2: ARRIBA Fusion Detection
+        ARRIBA_ch = ARRIBA(star_align_fusion_ch, params.reference_genome, params.gtf_annotation, 
+            params.arriba_blacklist, params.arriba_known_fusions)
+		
+		//Step 3: ARRIBA Visualisation
+        fusion_visuals = ARRIBA_VISUALIZATION(ARRIBA_ch, params.scripts_dir, params.reference_genome, params.gtf_annotation)
+
+        
+    }
+
+    else {
+        log.info("Running both Variant Calling and Gene Fusion Detection pipelines...")
+
+        //========================= Variant Calling Workflow =========================//
+        // Step 1: Align reads to reference genome using STAR
+        star_aligned_ch = STAR_ALIGNMENT(trimmed_reads_ch[0], params.star_genome_index)
+
+        // Step 2: Sort and index BAM files
+        sorted_bams = SAMTOOLS_SORT_INDEX(star_aligned_ch.map { tuple(it[0], it[1], it[5]) })
+
+        // Step 3: Filter orphan reads
+        filtered_bams = SAMTOOLS_FILTER_ORPHANS(sorted_bams)
+
+        // Step 4: Generate alignment statistics
+        alignment_stats = SAMTOOLS_FLAGSTAT(filtered_bams)
+
+        // Step 5: Mark duplicates
+        marked_bams = GATK_MARK_DUPLICATES(filtered_bams)
+        marked_bams.view { "Mark Duplicates Output: $it" }
+
+    //==================================== Variant Calling ====================================//
+
+        // Step 6: Split N CIGAR reads
+        split_bams = SPLIT_NCIGAR_READS(marked_bams.map { 
+            tuple(it[0], it[1], it[2], it[3]) }, 
+            params.reference_genome, params.reference_genome_index, params.reference_genome_dict
+        )
+
+        // Step 7: Apply SAMTOOLS CALMD
+        calmd_ch = SAMTOOLS_CALMD(split_bams.map { tuple(it[0], it[1], it[2], it[3]) }, 
+            params.reference_genome, params.reference_genome_index
+        )
+
+        // Step 8: Recalibrate and Apply BQSR
+        recalibrated_bams = GATK_RECALIBRATION(calmd_ch.map { 
+            tuple(it[0], it[1], it[2], it[3]) }, 
+            params.reference_genome, params.reference_genome_index, params.reference_genome_dict, 
+            params.merged_vcf, params.merged_vcf_index
+        )
+
+        // Step 9: Convert BED to interval list
+        interval_list_ch = BED_TO_INTERVAL_LIST(params.denylist_bed, params.reference_genome, params.reference_genome_dict)
+
+        // Step 10: Scatter the Interval List
+        scattered_intervals_ch = SCATTER_INTERVAL_LIST(interval_list_ch, params.reference_genome_dict)
+
+        // Step 11: Perform variant calling using GATK HaplotypeCaller
+        gvcf_output = GATK_HAPLOTYPE_CALLER(recalibrated_bams.map {
+            tuple(it[0], it[1], it[2], it[3]) 
+        }, params.reference_genome, params.reference_genome_index, params.reference_genome_dict, scattered_intervals_ch)
+
+        gvcf_output.view { "Raw GVCF output: $it" }
+
+        // Step 12: Generate variant statistics
+        bcftools_stats_ch = BCFTOOLS_STATS(gvcf_output)
+
+    //==================================== Variant Filtering ====================================//
+
+        // Step 13: Apply GATK Variant Filtering
+        filtered_individual_vcfs = GATK_VARIANT_FILTER(gvcf_output, 
+            params.reference_genome, params.reference_genome_index, params.reference_genome_dict
+        )
+
+        // Step 14: Query variant statistics
+        filtered_vcf_stats = BCFTOOLS_QUERY(filtered_individual_vcfs)
+
+        // Step 15: Collect filtered VCF paths
+        filtered_vcf = filtered_individual_vcfs
+            .map { it[1] } // Extract paths to filtered VCF files
+            .collect()      // Collect into a list
+
+        filtered_vcf.view { "Filtered VCF output: $it" }
+
+    //==================================== Variant Annotation ====================================//
+
+        if (params.merge_vcf) {
+            // Step 16: Merge filtered VCFs
+            merged_filtered_vcfs = BCFTOOLS_MERGE(filtered_vcf)
+
+            // Step 17: Annotate the merged VCF using snpEff
+            annotated_merged_vcf = ANNOTATE_VARIANTS(merged_filtered_vcfs, 
+                params.snpeff_jar, params.snpeff_config, params.snpeff_db, params.genomedb
+            )
+
+            // Step 18: Annotate merged VCF using Ensembl VEP
+            annotated_merged_vcf_ensemblvep = ANNOTATEVARIANTS_VEP(merged_filtered_vcfs, 
+                params.vep_cache_dir, params.clinvar, params.clinvartbi
+            )
+
+            println "Merging and annotating VCF files completed."
+
+            // Step 19: Convert merged VCF to table format
+            table_creation = EXTRACT_VCF(annotated_merged_vcf)
+
+            println "Table creation from merged VCF completed."
+
+        } else {
+            // Step 20: Annotate individual VCFs using snpEff
+            annotated_individual_vcfs = ANNOTATE_INDIVIDUAL_VARIANTS(filtered_individual_vcfs, 
+                params.snpeff_jar, params.snpeff_config, params.snpeff_db, params.genomedb
+            )
+
+            // Step 21: Annotate individual VCFs using Ensembl VEP
+            annotated_individual_vcf_ensemblvep = ANNOTATE_INDIVIDUAL_VARIANTS_VEP(filtered_individual_vcfs, 
+                params.vep_cache_dir, params.clinvar, params.clinvartbi
+            )
+
+            // Step 22: Convert individual VCFs to table format
+            csv_individual_vcf = EXTRACT_individual_VCF(annotated_individual_vcfs.map {
+                tuple(it[0], it[1], it[2])
+            })
+
+            println "Individual VCF annotation completed."
+            println "Table creation step skipped because merging is disabled."
+        }
+
+    //==================================== MultiQC Report ====================================//
+
+        // Step 23: Run MultiQC to aggregate QC results
         multiqc_results = MULTIQC_REPORT(
             fastqc_results = qc_results_ch.map { [it[1], it[2]] }.flatten().collect(),
             fastp_reports = trimmed_reads_ch.fastp_reports.map { [it[1], it[2]] }.flatten().collect(),
@@ -1321,15 +1470,16 @@ workflow {
 
     //==================================== Gene Fusion Detection ====================================//
 
-        // Step 29: Perform STAR alignment for fusion detection
+        // Step 24: Perform STAR alignment for fusion detection
         star_align_fusion_ch = STAR_ALIGN_FUSION(trimmed_reads_ch[0], params.star_genome_index, params.gtf_annotation)
 
-        // Step 30: Detect fusions using ARRIBA
+        // Step 25: Detect fusions using ARRIBA
         ARRIBA_ch = ARRIBA(star_align_fusion_ch, params.reference_genome, params.gtf_annotation, 
             params.arriba_blacklist, params.arriba_known_fusions
         )
 
-        // Step 31: Visualize fusion results
+        // Step 26: Visualize fusion results
         fusion_visuals = ARRIBA_VISUALIZATION(ARRIBA_ch, params.scripts_dir, params.reference_genome, params.gtf_annotation)
+
     }
 }

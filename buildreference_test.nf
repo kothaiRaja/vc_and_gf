@@ -762,16 +762,16 @@ merged_vcf_index_ch.view { merged_vcf_index_path ->
 		snpEffJarPath = params.snpeff_jar_path
 		snpEffConfigPath = params.snpeff_config_path
 
-	} else if (file("${params.test_data_dir}/Tools/snpEff.jar").exists() && 
-			file("${params.test_data_dir}/Tools/snpEff.config").exists()) {
+	} else if (file("${params.test_data_dir}/Tools/snpEff/snpEff.jar").exists() && 
+			file("${params.test_data_dir}/Tools/snpEff/snpEff.config").exists()) {
     
 		println "✅ SnpEff tool found in the publish directory. Skipping download."
 
-		snpeff_jar_ch = Channel.of(file("${params.test_data_dir}/Tools/snpEff.jar"))
-		snpeff_config_ch = Channel.of(file("${params.test_data_dir}/Tools/snpEff.config"))
+		snpeff_jar_ch = Channel.of(file("${params.test_data_dir}/Tools/snpEff/snpEff.jar"))
+		snpeff_config_ch = Channel.of(file("${params.test_data_dir}/Tools/snpEff/snpEff.config"))
 
-		snpEffJarPath = "${params.test_data_dir}/Tools/snpEff.jar"
-		snpEffConfigPath = "${params.test_data_dir}/Tools/snpEff.config"
+		snpEffJarPath = "${params.test_data_dir}/Tools/snpEff/snpEff.config"
+		snpEffConfigPath = "${params.test_data_dir}/Tools/snpEff/snpEff.config"
 
 	} else {
 		println "⚠️ SnpEff tool not found. Downloading..."
@@ -882,11 +882,11 @@ arriba_dir_ch.view { arriba_dir_path ->
     println "📂 Arriba tool path set to: ${arribaPath}"
 
     // Define known fusions and blacklist paths directly without immediate file check
-    knownFusionsPath = "${arribaPath}/database/known_fusions_hg38_GRCh38_v2.4.0.tsv.gz"
-    blacklistPath = "${arribaPath}/database/blacklist_hg38_GRCh38_v2.4.0.tsv.gz"
+    //knownFusionsPath = "${arribaPath}/database/known_fusions_hg38_GRCh38_v2.4.0.tsv.gz"
+    //blacklistPath = "${arribaPath}/database/blacklist_hg38_GRCh38_v2.4.0.tsv.gz"
 
-    println "📂 Known fusions path set to: ${knownFusionsPath}"
-    println "📂 Blacklist path set to: ${blacklistPath}"
+    //println "📂 Known fusions path set to: ${knownFusionsPath}"
+    //println "📂 Blacklist path set to: ${blacklistPath}"
 }
 
 
@@ -1000,8 +1000,6 @@ clinvar_tbi_ch.view { clinvar_tbi_path ->
             params.snpeff_config = '${snpEffConfigPath ?: 'NOT_FOUND'}'
 			params.snpeff_db = '${snpEffDbPath ?: 'NOT_FOUND'}'
 			params.arriba_tool_dir = '${arribaPath ?: 'NOT_FOUND'}'
-			params.arriba_known_fusions = '${knownFusionsPath ?: 'NOT_FOUND'}'
-			params.arriba_blacklist = '${blacklistPath ?: 'NOT_FOUND'}'
 			params.vep_cache_dir = '${vepCachePath ?: 'NOT_FOUND'}'
 			params.clinvar = '${clinvarVcfPath ?: 'NOT_FOUND'}'
             params.clinvartbi = '${clinvarTbiPath ?: 'NOT_FOUND'}'

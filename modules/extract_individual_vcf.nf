@@ -6,7 +6,7 @@ process EXTRACT_individual_VCF {
 	
 	
     input:
-    tuple val(sample_id), path(vcf_file),val(strandedness)
+    tuple val(sample_id), path(vcf_file),val(strandedness), path(html)
 
     output:
     path '*'

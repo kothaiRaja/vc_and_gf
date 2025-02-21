@@ -15,6 +15,7 @@ include { GATK_HAPLOTYPE_CALLER } from '../modules/gatk_haplotype_caller.nf'
 include { GATK_VARIANT_FILTER } from '../modules/gatk_variant_filter.nf'
 include { BCFTOOLS_STATS } from '../modules/bcftools_stats.nf'
 include { BCFTOOLS_MERGE } from '../modules/bcftools_merge.nf'
+include { BCFTOOLS_QUERY } from '../modules/bcftools_query.nf'
 
 workflow VARIANT_CALLING {
     take:
@@ -76,6 +77,9 @@ workflow VARIANT_CALLING {
 	
     // **Step 13: Apply GATK Variant Filtering**
     filtered_individual_vcfs = GATK_VARIANT_FILTER(gvcf_output, reference_genome, genome_index, genome_dict)
+	
+	// Step 16: Provide Stats
+	filtered_vcf_stats = BCFTOOLS_QUERY(filtered_individual_vcfs)
 
     
 
@@ -93,5 +97,9 @@ workflow VARIANT_CALLING {
 
     emit:
         final_vcf = final_vcf_output
-        stats_report = bcftools_stats_ch
+        star_logs = star_aligned_ch.map { [it[2], it[3], it[4]] }.flatten().collect()
+        samtools_flagstat = alignment_stats.map { it[1] }.flatten().collect()
+        gatk_metrics = marked_bams.map { it[4] }.flatten().collect()
+        bcftools_stats = bcftools_stats_ch.map { it[2] }.flatten().collect()
+		filtered_vcf_stats = filtered_vcf_stats.map { it[2] }.flatten().collect()  
 }

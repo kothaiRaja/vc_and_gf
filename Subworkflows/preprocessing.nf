@@ -39,8 +39,8 @@ workflow PREPROCESSING {
     log.info "✅ Preprocessing Completed."
 
     emit:
-        trimmed_reads    = trimmed_reads_ch.trimmed_reads  // Ensuring a single-channel output
-        fastp_reports    = trimmed_reads_ch.fastp_reports  // Keeping fastp reports separate
-        qc_reports       = qc_results_ch                   // Ensuring QC reports are properly outputted
+        trimmed_reads    = trimmed_reads_ch.trimmed_reads  
+        fastp_reports    = trimmed_reads_ch.fastp_reports.map { [it[1], it[2]] }.flatten().collect()  
+        qc_reports       = qc_results_ch.map { [it[1], it[2]] }.flatten().collect()                   
 		multiqc        = multiqc_quality
 }

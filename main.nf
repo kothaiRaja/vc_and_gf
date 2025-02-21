@@ -9,23 +9,6 @@ include { MULTIQC_REPORT } from './Subworkflows/multiqc.nf'
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 workflow {
 
     if (params.only_variant_calling && params.only_fusion_detection) {
@@ -34,10 +17,12 @@ workflow {
 
     //==================================== Preprocessing ====================================//
     
-    // ✅ Correctly pass `samplesheet` into the PREPROCESSING workflow
+    //==============================Step 1: Quality Control ===================================//
+	
     PREPROCESSING(params.samplesheet)
 
-    // ✅ Assign outputs correctly
+    // Outputs from Preprocessing Subworkflow
+	
     trimmed_reads_ch  = PREPROCESSING.out.trimmed_reads
     fastp_reports_ch  = PREPROCESSING.out.fastp_reports
     qc_results_ch     = PREPROCESSING.out.qc_reports
@@ -53,9 +38,10 @@ workflow {
     //==================================== Run Specific Pipelines ====================================//
 
 
-        // **Step 2: Variant Calling**
+        //===============================Step 2: Variant Calling=====================================//
+		
     if (params.only_variant_calling) {
-        log.info("Running only Variant Calling pipeline... 🧬")
+        log.info("Running only Variant Calling pipeline... ")
 
         VARIANT_CALLING(
             trimmed_reads_ch,
@@ -67,6 +53,8 @@ workflow {
             params.merged_vcf_index,
             params.denylist_bed
         )
+		
+		//=======================Outputs from Variant calling Subworkflow===========================//
 
         final_vcf_output = VARIANT_CALLING.out.final_vcf
         star_logs = VARIANT_CALLING.out.star_logs
@@ -75,29 +63,35 @@ workflow {
         bcftools_stats = VARIANT_CALLING.out.bcftools_stats
 		filtered_vcf_stats = VARIANT_CALLING.out.filtered_vcf_stats
 		
-        log.info "✅ Variant Calling Pipeline Completed."
+        log.info " Variant Calling Pipeline Completed."
+		
+		//==============================Step 3: Annotation======================================//
 		
 		log.info("🔬 Running Variant Annotation pipeline...")
 
     ANNOTATION(
-    VARIANT_CALLING.out.final_vcf,     
-    params.merge_vcf,
-    params.snpeff_jar,
-    params.snpeff_config,
-    params.snpeff_db,
-    params.genomedb,
-    params.vep_cache_dir,
-    params.clinvar,
-    params.clinvartbi
-)
+		VARIANT_CALLING.out.final_vcf,     
+		params.merge_vcf,
+		params.snpeff_jar,
+		params.snpeff_config,
+		params.snpeff_db,
+		params.genomedb,
+		params.vep_cache_dir,
+		params.clinvar,
+		params.clinvartbi
+	)
 
 
 
-    log.info "✅ Variant Annotation Pipeline Completed."
+    log.info " Variant Annotation Pipeline Completed."
 	
-	// ✅ Run MultiQC ONLY for Variant Calling
-        log.info("📊 Running MultiQC for Variant Calling...")
-        MULTIQC_REPORT(
+	//===========================================Step 4: MultiQC===================================//
+	
+	// Run MultiQC ONLY for Variant Calling
+        
+		log.info(" Running MultiQC for Variant Calling...")
+        
+		MULTIQC_REPORT(
             fastqc_results = qc_results_ch ,
             fastp_reports = fastp_reports_ch,
             star_logs = star_logs,
@@ -106,13 +100,14 @@ workflow {
             bcftools_stats = bcftools_stats,
 			filtered_vcf_stats = filtered_vcf_stats
         )
-        log.info "✅ MultiQC Report Generated for Variant Calling."
+        log.info "MultiQC Report Generated for Variant Calling."
 		
     }
 	
-	// ✅ Step 4: Gene Fusion Detection
-    else if (params.only_fusion_detection) {
-        log.info("🔍 Running only Gene Fusion Detection pipeline...")
+	//======================================== Step 5: Gene Fusion Detection===========================//
+    
+	else if (params.only_fusion_detection) {
+        log.info(" Running only Gene Fusion Detection pipeline...")
 
         GENE_FUSION(
             trimmed_reads_ch,
@@ -124,12 +119,12 @@ workflow {
             params.scripts_dir
         )
 
-        log.info "✅ Gene Fusion Pipeline Completed."
+        log.info " Gene Fusion Pipeline Completed."
     }
 	
-	// ✅ Step 5: Run Both (Full Workflow)
+	//=====================================  Step 6: Run Both (Full Workflow)=============================//
     else {
-        log.info("🛠 Running both Variant Calling & Gene Fusion pipelines...")
+        log.info(" Running both Variant Calling & Gene Fusion pipelines...")
 
         // Run Variant Calling
         VARIANT_CALLING(
@@ -156,19 +151,20 @@ workflow {
             params.clinvartbi
         )
 		
-		// ✅ Run MultiQC ONLY for Variant Calling
-        log.info("📊 Running MultiQC for Variant Calling...")
-        // Step 23: Run MultiQC to aggregate QC results
+		//  Run MultiQC ONLY for Variant Calling
+        log.info(" Running MultiQC for Variant Calling...")
+        
         MULTIQC_REPORT(
-            fastqc_results = qc_results_ch.map { [it[1], it[2]] }.flatten().collect(),
-            fastp_reports = fastp_reports_ch.map { [it[1], it[2]] }.flatten().collect(),
-            star_logs = star_aligned_ch.map { [it[2], it[3], it[4]] }.flatten().collect(),
-            samtools_flagstat = alignment_stats.map { it[1] }.flatten().collect(),
-            gatk_metrics = marked_bams.map { it[4] }.flatten().collect(),
-            bcftools_stats = bcftools_stats_ch.map { it[2] }.flatten().collect()
+            fastqc_results = qc_results_ch ,
+            fastp_reports = fastp_reports_ch,
+            star_logs = star_logs,
+            samtools_flagstat = samtools_flagstat,
+            gatk_metrics = gatk_metrics,
+            bcftools_stats = bcftools_stats,
+			filtered_vcf_stats = filtered_vcf_stats
         )
 
-        log.info "✅ MultiQC Report Generated for Variant Calling."
+        log.info " MultiQC Report Generated for Variant Calling."
 
         // Run Gene Fusion Detection
         GENE_FUSION(
@@ -181,7 +177,7 @@ workflow {
             params.scripts_dir
         )
 
-        log.info "✅ Complete Pipeline Execution Completed."
+        log.info " Complete Pipeline Execution Completed."
 		
 	
     }

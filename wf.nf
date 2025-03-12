@@ -1,7 +1,141 @@
 nextflow.enable.dsl = 2
 
+process FASTQC_RAW {
+    tag { sample_id }
+	
+	cpus params.get('fastqc_raw_cpus', 2)
+    memory params.get('fastqc_raw_memory', '4 GB')
+    time params.get('fastqc_raw_time', '1h')
+	
+    publishDir "${params.outdir}/multiqc_input", mode: "copy", pattern: "*_fastqc.*"
+    container "https://depot.galaxyproject.org/singularity/fastqc%3A0.12.1--hdfd78af_0"
 
+    input:
+    tuple val(sample_id), path(r1), path(r2), val(strandedness)
 
+    output:
+    tuple val(sample_id), path("*.zip"), path("*.html"), val(strandedness), emit: qc_results
+
+    script:
+    """
+    fastqc ${r1} ${r2} --outdir .
+    """
+}
+
+process TRIM_READS {
+    tag { sample_id }
+	
+	cpus params.get('trim_reads_cpus', 4)
+	memory params.get('trim_reads_memory', '8 GB')
+	time params.get('trim_reads_time', '2h')
+
+	
+    container "https://depot.galaxyproject.org/singularity/fastp%3A0.23.4--h125f33a_5"
+    publishDir "${params.outdir}/multiqc_input", mode: "copy", pattern: "*_fastp.*"
+
+    input:
+    tuple val(sample_id), path(r1), path(r2), val(strandedness)
+
+    output:
+    tuple val(sample_id), path("trimmed_${sample_id}_R1.fastq.gz"), path("trimmed_${sample_id}_R2.fastq.gz"), val(strandedness), emit: trimmed_reads
+    tuple val(sample_id), path("${sample_id}_fastp.html"), path("${sample_id}_fastp.json"), emit: fastp_reports
+
+    script:
+    """
+    fastp -i ${r1} -I ${r2} \
+      -o trimmed_${sample_id}_R1.fastq.gz \
+      -O trimmed_${sample_id}_R2.fastq.gz \
+      --detect_adapter_for_pe \
+      --adapter_sequence auto \
+      --adapter_sequence_r2 auto \
+      --length_required 50 \
+      --cut_front --cut_tail \
+      --cut_window_size 4 \
+      --cut_mean_quality 20 \
+      --html ${sample_id}_fastp.html \
+      --json ${sample_id}_fastp.json
+    """
+}
+
+process STAR_ALIGNMENT {
+    tag { sample_id }
+
+    cpus params.get('star_alignment_cpus', 12)
+    memory params.get('star_alignment_memory', '32 GB')
+    time params.get('star_alignment_time', '6h')
+
+    container "https://depot.galaxyproject.org/singularity/star%3A2.7.11a--h0033a41_0"
+    publishDir "${params.outdir}/star_output", mode: "copy"
+
+    input:
+    tuple val(sample_id), path(trimmed_r1), path(trimmed_r2), val(strandedness)
+    path star_index_dir
+    path gtf_file
+
+    output:
+    tuple val(sample_id), 
+          path("${sample_id}_Aligned.sortedByCoord.out.bam"), 
+          path("${sample_id}_Log.final.out"), 
+          path("${sample_id}_Log.out"), 
+          path("${sample_id}_Log.progress.out"),
+          path("${sample_id}_Chimeric.out.sam"),
+          path("${sample_id}_SJ.out.tab"),
+          val(strandedness)
+
+    script:
+    """
+    echo "Running STAR Two-Pass Alignment for Sample: ${sample_id}"
+
+    THREADS=${task.cpus}
+    RAM_LIMIT=32000000000  # 32GB for sorting
+
+    # **First Pass: Discover Splice Junctions**
+    STAR --genomeDir ${star_index_dir} \
+         --readFilesIn ${trimmed_r1} ${trimmed_r2} \
+         --runThreadN \$THREADS \
+         --readFilesCommand zcat \
+         --outFilterType BySJout \
+         --alignSJoverhangMin 8 \
+         --alignSJDBoverhangMin 1 \
+         --outFilterMismatchNmax 999 \
+         --outFilterMatchNmin 16 \
+         --outFilterMatchNminOverLread 0.3 \
+         --outFilterScoreMinOverLread 0.3 \
+         --outSAMattributes NH HI AS nM MD NM \
+         --outFileNamePrefix ${sample_id}_pass1_ \
+         --limitBAMsortRAM \$RAM_LIMIT
+
+    # **Second Pass: Final Alignment with Junctions from First Pass**
+    STAR --genomeDir ${star_index_dir} \
+         --readFilesIn ${trimmed_r1} ${trimmed_r2} \
+         --runThreadN \$THREADS \
+         --readFilesCommand zcat \
+         --sjdbFileChrStartEnd ${sample_id}_pass1_SJ.out.tab \
+         --sjdbGTFfile ${gtf_file} \
+         --twopassMode None \
+         --outFilterType BySJout \
+         --alignSJoverhangMin 8 \
+         --alignSJDBoverhangMin 1 \
+         --outFilterMismatchNmax 999 \
+         --outFilterMatchNmin 16 \
+         --outFilterMatchNminOverLread 0.3 \
+         --outFilterScoreMinOverLread 0.3 \
+         --chimSegmentMin 10 \
+         --chimJunctionOverhangMin 10 \
+         --chimScoreJunctionNonGTAG -4 \
+         --chimScoreMin 1 \
+         --chimOutType WithinBAM SeparateSAMold \
+         --chimScoreDropMax 50 \
+         --chimScoreSeparation 10 \
+         --outSAMtype BAM SortedByCoordinate \
+         --limitBAMsortRAM \$RAM_LIMIT \
+         --outSAMattrRGline ID:$sample_id LB:library PL:illumina PU:machine SM:$sample_id \
+         --outSAMunmapped Within \
+         --quantMode TranscriptomeSAM GeneCounts \
+         --outFileNamePrefix ${sample_id}_
+
+    """
+}
 
 
 process SAMTOOLS_SORT_INDEX {
@@ -703,21 +837,38 @@ process ANNOTATEVARIANTS_VEP {
 
 workflow {
 
-	star_aligned_ch = Channel
-		.fromPath(params.reads)
-		.map { bam_file ->
-			def sample_id = bam_file.baseName.split('_Aligned')[0]
-			def strandedness = params.strandedness_map.get(sample_id, "unknown")
-			return tuple(sample_id, bam_file, strandedness)
+	// Step 1: Read samplesheet
+    samples_ch = Channel.fromPath(params.samplesheet)
+        .splitCsv(header: true)
+        .map { row -> tuple(row.sample_id, file(row.fastq_1), file(row.fastq_2), row.strandedness) }
+
+
+    // Step 3: Perform FastQC on raw reads
+    qc_results_ch = FASTQC_RAW(samples_ch)
+
+    // Step 4: Trim reads using Fastp
+    trimmed_reads_ch = TRIM_READS(samples_ch)
+
+
+	// **Step 1: STAR Alignment**
+        star_aligned_ch = STAR_ALIGNMENT(trimmed_reads_ch[0], params.star_genome_index, params.gtf_annotation)
+		
+		star_aligned_ch.view { "STAR Alignment Output: $it" }
+		
+		// **Extract only BAM file from STAR output before passing to Samtools**
+    sorted_bams_ch = star_aligned_ch.map { sample_id, bam, log_final, log_out, log_progress, chimeric_sam, sj_tab, strandedness ->
+        tuple(sample_id, bam, strandedness)  // Extract only BAM and strandedness
     }
+	
+	sorted_bams_ch.view {"Channel STAR output: $it "}
+	
+	
 
-star_aligned_ch.view { "STAR Alignment Output: $it" }
-		
-		
+    // **Step 5: Sort BAM files**
+    sorted_bams = SAMTOOLS_SORT_INDEX(sorted_bams_ch)
+    sorted_bams.view { "Sorted BAMs Output: $it" }
 
-        // **Step 2: Sort BAM files**
-        sorted_bams = SAMTOOLS_SORT_INDEX(star_aligned_ch)
-		sorted_bams.view { "Sorted BAMs Output: $it" }
+       
 
         // **Step 3: Filter orphan reads**
         filtered_bams = SAMTOOLS_FILTER_ORPHANS(sorted_bams)
